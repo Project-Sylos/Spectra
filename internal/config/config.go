@@ -83,6 +83,10 @@ func LoadFromFile(configPath string) (*types.Config, error) {
 
 // Validate checks that the configuration parameters are valid
 func Validate(cfg *types.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+	
 	// Validate seed config
 	if cfg.Seed.MaxDepth < 1 {
 		return fmt.Errorf("max_depth must be at least 1, got %d", cfg.Seed.MaxDepth)

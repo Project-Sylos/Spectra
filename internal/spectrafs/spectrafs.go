@@ -180,7 +180,10 @@ func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
 	}
 
 	// Generate random data and checksum
-	data, checksum := generator.GenerateFileData(s.rng)
+	data, checksum, err := generator.GenerateFileData(s.rng)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate file data: %w", err)
+	}
 	return data, checksum, nil
 }
 
@@ -293,7 +296,10 @@ func (s *SpectraFS) UploadFile(parentID, name string, data []byte) (*types.Node,
 	}
 
 	// Note: checksum is computed but not stored in DB per current design
-	_, _ = generator.GenerateFileDataForUpload(data, s.rng)
+	_, _, err = generator.GenerateFileDataForUpload(data, s.rng)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate file data for upload: %w", err)
+	}
 
 	return fileNode, nil
 }
@@ -338,11 +344,19 @@ func (s *SpectraFS) GetTableInfo() ([]types.TableInfo, error) {
 
 // UpdateTraversalStatus updates the traversal status of a node
 func (s *SpectraFS) UpdateTraversalStatus(id, status string) error {
+	// Validate status
+	if status != types.StatusPending && status != types.StatusSuccessful && status != types.StatusFailed {
+		return fmt.Errorf("invalid traversal status: %s", status)
+	}
 	return s.db.UpdateTraversalStatus(id, status)
 }
 
 // DeleteNode deletes a node by its ID
 func (s *SpectraFS) DeleteNode(id string) error {
+	// Prevent deletion of root node
+	if id == "p-root" {
+		return fmt.Errorf("cannot delete root node")
+	}
 	return s.db.DeleteNode(id)
 }
 

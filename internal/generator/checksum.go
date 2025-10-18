@@ -13,13 +13,14 @@ func ComputeChecksum(data []byte) string {
 
 // GenerateFileData generates 1KB of random data and returns both the data and its checksum
 // This matches the requirement for 1KB files with checksum generation
-func GenerateFileData(rng *RNG) ([]byte, string) {
+func GenerateFileData(rng *RNG) ([]byte, string, error) {
 	// Generate 1KB (1024 bytes) of random data
 	data := make([]byte, 1024)
-	for i := range data {
-		data[i] = byte(rng.Intn(256))
+	_, err := rng.Read(data)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate random data: %w", err)
 	}
 	
 	checksum := ComputeChecksum(data)
-	return data, checksum
+	return data, checksum, err
 }

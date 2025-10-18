@@ -40,6 +40,7 @@ type Node struct {
 	Size                  int64           `json:"size" db:"size"`                                       // File size (0 for folders)
 	LastUpdated           time.Time       `json:"last_updated" db:"last_updated"`                       // Synthetic timestamp
 	TraversalStatus       string          `json:"traversal_status" db:"traversal_status"`               // "pending", "successful", "failed"
+	Checksum              *string         `json:"checksum" db:"checksum"`                               // SHA256 checksum (NULL for folders)
 	SecondaryExistenceMap map[string]bool `json:"secondary_existence_map" db:"secondary_existence_map"` // JSON: {"s1": true, "s2": false}
 }
 
@@ -101,7 +102,27 @@ func IsPrimaryID(id string) bool {
 }
 
 func IsSecondaryID(id string) bool {
-	return len(id) > 2 && id[:1] == SecondaryPrefix && id[1:2] != "-"
+	if len(id) < 4 || id[:1] != SecondaryPrefix {
+		return false
+	}
+
+	// Find the dash position
+	for i, char := range id {
+		if char == '-' {
+			// Check that everything before the dash is "s" followed by digits
+			prefix := id[1:i]
+			if len(prefix) == 0 {
+				return false
+			}
+			for _, c := range prefix {
+				if c < '0' || c > '9' {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func GetTableFromID(id string) string {

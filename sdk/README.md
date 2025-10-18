@@ -135,6 +135,15 @@ All SDK methods return proper Go errors that should be handled by the caller. Th
 
 The SDK is designed to be thread-safe and can be used concurrently from multiple goroutines.
 
+## Command-Line Applications
+
+The SDK is used by two main command-line applications:
+
+- **SDK Demo** (`main.go`): Demonstrates SDK functionality and testing
+- **API Server** (`cmd/api/main.go`): Production HTTP server exposing SDK via REST API
+
+See the main project README for usage instructions.
+
 ## Versioning
 
 The SDK follows semantic versioning. Breaking changes will result in a major version bump, while new features and bug fixes will result in minor and patch version bumps respectively.

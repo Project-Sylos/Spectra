@@ -91,8 +91,8 @@ func (db *DB) InsertPrimaryNode(node *types.Node) error {
 	}
 
 	query := `
-INSERT INTO nodes_primary (id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, secondary_existence_map)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+INSERT INTO nodes_primary (id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, checksum, secondary_existence_map)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = db.conn.Exec(query,
 		node.ID,
@@ -104,6 +104,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		node.Size,
 		node.LastUpdated,
 		node.TraversalStatus,
+		node.Checksum,
 		string(existenceMapJSON),
 	)
 	if err != nil {
@@ -115,8 +116,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 // InsertSecondaryNode inserts a new node into a secondary table
 func (db *DB) InsertSecondaryNode(tableName string, node *types.Node) error {
 	query := fmt.Sprintf(`
-INSERT INTO nodes_%s (id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
+INSERT INTO nodes_%s (id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, checksum)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
 
 	_, err := db.conn.Exec(query,
 		node.ID,
@@ -128,6 +129,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
 		node.Size,
 		node.LastUpdated,
 		node.TraversalStatus,
+		node.Checksum,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert secondary node %s into %s: %w", node.ID, tableName, err)
@@ -142,28 +144,53 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 		return nil, fmt.Errorf("invalid node ID format: %s", id)
 	}
 
-	query := fmt.Sprintf(`
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, secondary_existence_map
+	var query string
+	if tableName == "nodes_primary" {
+		query = fmt.Sprintf(`
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, checksum, secondary_existence_map
 FROM %s
 WHERE id = ?`, tableName)
+	} else {
+		query = fmt.Sprintf(`
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, checksum
+FROM %s
+WHERE id = ?`, tableName)
+	}
 
 	row := db.conn.QueryRow(query, id)
 
 	node := &types.Node{}
 	var existenceMapJSON string
 
-	err := row.Scan(
-		&node.ID,
-		&node.ParentID,
-		&node.Name,
-		&node.Path,
-		&node.Type,
-		&node.DepthLevel,
-		&node.Size,
-		&node.LastUpdated,
-		&node.TraversalStatus,
-		&existenceMapJSON,
-	)
+	var err error
+	if tableName == "nodes_primary" {
+		err = row.Scan(
+			&node.ID,
+			&node.ParentID,
+			&node.Name,
+			&node.Path,
+			&node.Type,
+			&node.DepthLevel,
+			&node.Size,
+			&node.LastUpdated,
+			&node.TraversalStatus,
+			&node.Checksum,
+			&existenceMapJSON,
+		)
+	} else {
+		err = row.Scan(
+			&node.ID,
+			&node.ParentID,
+			&node.Name,
+			&node.Path,
+			&node.Type,
+			&node.DepthLevel,
+			&node.Size,
+			&node.LastUpdated,
+			&node.TraversalStatus,
+			&node.Checksum,
+		)
+	}
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -191,11 +218,20 @@ func (db *DB) GetChildrenByParentID(parentID string) ([]*types.Node, error) {
 		return nil, fmt.Errorf("invalid parent ID format: %s", parentID)
 	}
 
-	query := fmt.Sprintf(`
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, secondary_existence_map
+	var query string
+	if tableName == "nodes_primary" {
+		query = fmt.Sprintf(`
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, checksum, secondary_existence_map
 FROM %s
 WHERE parent_id = ?
 ORDER BY type, name`, tableName)
+	} else {
+		query = fmt.Sprintf(`
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, traversal_status, checksum
+FROM %s
+WHERE parent_id = ?
+ORDER BY type, name`, tableName)
+	}
 
 	rows, err := db.conn.Query(query, parentID)
 	if err != nil {
@@ -208,18 +244,35 @@ ORDER BY type, name`, tableName)
 		node := &types.Node{}
 		var existenceMapJSON string
 
-		err := rows.Scan(
-			&node.ID,
-			&node.ParentID,
-			&node.Name,
-			&node.Path,
-			&node.Type,
-			&node.DepthLevel,
-			&node.Size,
-			&node.LastUpdated,
-			&node.TraversalStatus,
-			&existenceMapJSON,
-		)
+		var err error
+		if tableName == "nodes_primary" {
+			err = rows.Scan(
+				&node.ID,
+				&node.ParentID,
+				&node.Name,
+				&node.Path,
+				&node.Type,
+				&node.DepthLevel,
+				&node.Size,
+				&node.LastUpdated,
+				&node.TraversalStatus,
+				&node.Checksum,
+				&existenceMapJSON,
+			)
+		} else {
+			err = rows.Scan(
+				&node.ID,
+				&node.ParentID,
+				&node.Name,
+				&node.Path,
+				&node.Type,
+				&node.DepthLevel,
+				&node.Size,
+				&node.LastUpdated,
+				&node.TraversalStatus,
+				&node.Checksum,
+			)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan child node: %w", err)
 		}
@@ -282,10 +335,20 @@ func (db *DB) UpdateSecondaryExistenceMap(id string, existenceMap map[string]boo
 	}
 
 	query := `UPDATE nodes_primary SET secondary_existence_map = ? WHERE id = ?`
-	_, err = db.conn.Exec(query, string(existenceMapJSON), id)
+	result, err := db.conn.Exec(query, string(existenceMapJSON), id)
 	if err != nil {
 		return fmt.Errorf("failed to update secondary existence map for %s: %w", id, err)
 	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected for %s: %w", id, err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("node %s not found", id)
+	}
+
 	return nil
 }
 
@@ -390,6 +453,7 @@ func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error
 		Size:                  0, // Folders have size 0
 		LastUpdated:           time.Now(),
 		TraversalStatus:       types.StatusPending,
+		Checksum:              nil, // Folders don't have checksums
 		SecondaryExistenceMap: make(map[string]bool),
 	}
 
@@ -408,6 +472,7 @@ func (db *DB) CreateRootNode() error {
 		Size:                  0,
 		LastUpdated:           time.Now(),
 		TraversalStatus:       types.StatusPending,
+		Checksum:              nil, // Folders don't have checksums
 		SecondaryExistenceMap: make(map[string]bool),
 	}
 

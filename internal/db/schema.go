@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS nodes_primary (
     size BIGINT NOT NULL,
     last_updated TIMESTAMP NOT NULL,
     traversal_status VARCHAR NOT NULL DEFAULT 'pending' CHECK (traversal_status IN ('pending', 'successful', 'failed')),
+    checksum VARCHAR,
     secondary_existence_map JSON NOT NULL DEFAULT '{}'
 );`
 
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS %s (
     depth_level INTEGER NOT NULL,
     size BIGINT NOT NULL,
     last_updated TIMESTAMP NOT NULL,
-    traversal_status VARCHAR NOT NULL DEFAULT 'pending' CHECK (traversal_status IN ('pending', 'successful', 'failed'))
+    traversal_status VARCHAR NOT NULL DEFAULT 'pending' CHECK (traversal_status IN ('pending', 'successful', 'failed')),
+    checksum VARCHAR
 );`
 
 	// CreatePrimaryIndexesSQL creates indexes for the primary table

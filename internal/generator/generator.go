@@ -25,6 +25,10 @@ func NewRNG(seed int64) *RNG {
 // GenerateChildren generates children nodes for a given parent based on configuration
 // Enhanced with UUID-based IDs and secondary table probability logic
 func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config) ([]*types.Node, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("configuration cannot be nil")
+	}
+
 	var children []*types.Node
 
 	// Don't generate children if we've reached max depth
@@ -35,7 +39,7 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	// Generate folders
 	folderCount := rng.Intn(cfg.Seed.MaxFolders-cfg.Seed.MinFolders+1) + cfg.Seed.MinFolders
 	for i := 0; i < folderCount; i++ {
-		folder, err := generateFolder(parent, i+1, depth+1, rng)
+		folder, err := generateFolder(parent, i+1, depth+1)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate folder %d: %w", i+1, err)
 		}
@@ -56,7 +60,7 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 }
 
 // generateFolder creates a new folder node with UUID-based ID
-func generateFolder(parent *types.Node, index int, depth int, rng *RNG) (*types.Node, error) {
+func generateFolder(parent *types.Node, index int, depth int) (*types.Node, error) {
 	name := fmt.Sprintf("folder_%d", index)
 	path := filepath.Join(parent.Path, name)
 
@@ -74,6 +78,7 @@ func generateFolder(parent *types.Node, index int, depth int, rng *RNG) (*types.
 		Size:                  0, // Folders have size 0
 		LastUpdated:           time.Now(),
 		TraversalStatus:       types.StatusPending,
+		Checksum:              nil, // Folders don't have checksums
 		SecondaryExistenceMap: make(map[string]bool),
 	}, nil
 }
@@ -87,6 +92,12 @@ func generateFile(parent *types.Node, index int, depth int, rng *RNG) (*types.No
 	nodeUUID := uuid.New().String()
 	primaryID := types.PrimaryPrefix + nodeUUID
 
+	// Generate file data and checksum
+	_, checksum, err := GenerateFileData(rng)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate file data: %w", err)
+	}
+
 	return &types.Node{
 		ID:                    primaryID,
 		ParentID:              parent.ID,
@@ -97,16 +108,20 @@ func generateFile(parent *types.Node, index int, depth int, rng *RNG) (*types.No
 		Size:                  1024, // 1KB files as specified
 		LastUpdated:           time.Now(),
 		TraversalStatus:       types.StatusPending,
+		Checksum:              &checksum, // Store the computed checksum
 		SecondaryExistenceMap: make(map[string]bool),
 	}, nil
 }
 
 // GenerateFileDataForUpload generates random data and checksum for uploaded files
 // This is used when someone uploads file data - we compute checksum but don't persist the data
-func GenerateFileDataForUpload(uploadedData []byte, rng *RNG) ([]byte, string) {
+func GenerateFileDataForUpload(uploadedData []byte, rng *RNG) ([]byte, string, error) {
 	// Generate 1KB of random data (we ignore the uploaded data as per requirements)
-	data, checksum := GenerateFileData(rng)
-	return data, checksum
+	data, checksum, err := GenerateFileData(rng)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate file data: %w", err)
+	}
+	return data, checksum, nil
 }
 
 // ValidateConfig validates the generator configuration

@@ -38,6 +38,13 @@ PowerShell script for setting up the development environment on Windows.
 - DuckDB binaries and headers
 - Go dependencies via `go mod tidy`
 
+#### DuckDB Version Compatibility:
+Spectra uses specific DuckDB versions for Windows compatibility:
+- `go-duckdb v1.7.0`
+- `apache/arrow/go/v14 v14.0.2`
+
+These versions are known to work well with the Windows CGO setup and avoid common linking issues.
+
 ## Manual Setup
 
 If the automated script doesn't work or you prefer manual setup:

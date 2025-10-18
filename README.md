@@ -68,24 +68,27 @@ The system automatically determines which table to query based on node ID prefix
 
 ```
 Spectra/
-├── configs/                    # Configuration files
-│   └── default.json           # Default configuration
-├── internal/                   # Internal implementation
-│   ├── api/                   # HTTP API layer
-│   │   ├── handlers/          # Endpoint handlers
-│   │   ├── middleware/        # HTTP middleware
-│   │   ├── models/            # Request/response models
-│   │   ├── router.go          # Route configuration
-│   │   └── server.go          # HTTP server
-│   ├── config/                # Configuration management
-│   ├── db/                    # Database layer
-│   ├── generator/             # Procedural generation
-│   ├── spectrafs/             # Core filesystem logic
-│   └── types/                 # Type definitions
-├── sdk/                       # Public SDK interface
-├── dev_setup_scripts/         # Development setup scripts
-├── main.go                    # Application entry point
-└── go.mod                     # Go module definition
+├── cmd/                       # Command-line applications
+│   └── api/                   # API server application
+│       └── main.go           # HTTP API server entry point
+├── configs/                   # Configuration files
+│   └── default.json          # Default configuration
+├── internal/                  # Internal implementation
+│   ├── api/                  # HTTP API layer
+│   │   ├── handlers/         # Endpoint handlers
+│   │   ├── middleware/       # HTTP middleware
+│   │   ├── models/           # Request/response models
+│   │   ├── router.go         # Route configuration
+│   │   └── server.go         # HTTP server
+│   ├── config/               # Configuration management
+│   ├── db/                   # Database layer
+│   ├── generator/            # Procedural generation
+│   ├── spectrafs/            # Core filesystem logic
+│   └── types/                # Type definitions
+├── sdk/                      # Public SDK interface
+├── dev_setup_scripts/        # Development setup scripts
+├── main.go                   # SDK demo application
+└── go.mod                    # Go module definition
 ```
 
 ---
@@ -186,21 +189,24 @@ type SpectraFS struct {
 
 ## Usage
 
-### Running the Application
+### Running the Applications
 
-#### Demo Mode (SDK Usage)
+#### SDK Demo Application
 ```bash
-go run main.go -mode demo
+# Run the SDK demonstration
+go run main.go
+
+# Use custom configuration
+go run main.go -config configs/custom.json
 ```
 
-#### API Server Mode
+#### API Server
 ```bash
-go run main.go -mode server
-```
+# Start the HTTP API server with default configuration
+go run cmd/api/main.go
 
-#### Custom Configuration
-```bash
-go run main.go -mode server -config configs/custom.json
+# Start with custom configuration
+go run cmd/api/main.go configs/custom.json
 ```
 
 ### Example API Calls
@@ -243,11 +249,42 @@ This script will:
 - Configure environment variables
 - Install Go dependencies
 
+**Note**: Spectra uses `go-duckdb v1.7.0` and `apache/arrow/go/v14 v14.0.2` for Windows compatibility. These versions are known to work well with the Windows CGO setup.
+
 ### Manual Setup
 1. Install Go 1.24.2 or later
 2. Install DuckDB with CGO support
 3. Run `go mod tidy` to install dependencies
-4. Build with `go build .`
+4. Build applications:
+   ```bash
+   # Build SDK demo
+   go build -o bin/spectra-demo main.go
+   
+   # Build API server
+   go build -o bin/spectra-api cmd/api/main.go
+   ```
+
+---
+
+## Command-Line Applications
+
+Spectra provides two main command-line applications:
+
+### SDK Demo (`main.go`)
+A demonstration application that showcases the Spectra SDK functionality:
+- Loads configuration and initializes SpectraFS
+- Demonstrates table information and node generation
+- Shows multi-table operations and secondary table counts
+- Performs a complete reset operation
+- Perfect for testing and understanding the SDK
+
+### API Server (`cmd/api/main.go`)
+A production-ready HTTP server that exposes the Spectra filesystem via RESTful API:
+- Starts HTTP server on configurable host and port
+- Provides all CRUD operations via REST endpoints
+- Includes graceful shutdown and timeout handling
+- Supports CORS and proper error responses
+- Ideal for integration testing and production use
 
 ---
 
