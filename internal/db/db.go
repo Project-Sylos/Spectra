@@ -104,13 +104,14 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 	}
 
 	// Build insert query with all traversal columns
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
-	values := []interface{}{
+	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	values := []any{
 		"root",
 		"",
 		"root",
 		"/",
+		"",
 		types.NodeTypeFolder,
 		0,
 		0,
@@ -149,13 +150,14 @@ func (db *DB) InsertNode(node *types.Node) error {
 	}
 
 	// Build dynamic column list and values based on traversal columns
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
-	values := []interface{}{
+	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	values := []any{
 		node.ID,
 		node.ParentID,
 		node.Name,
 		node.Path,
+		node.ParentPath,
 		node.Type,
 		node.DepthLevel,
 		node.Size,
@@ -182,7 +184,7 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 	defer db.mu.Unlock()
 
 	// Build dynamic column list for traversal statuses
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
 
 	query := fmt.Sprintf("SELECT %s FROM nodes WHERE id = ?", strings.Join(columns, ", "))
 	row := db.conn.QueryRow(query, id)
@@ -192,11 +194,12 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 	var checksumNull sql.NullString
 
 	// Prepare scan targets
-	scanTargets := []interface{}{
+	scanTargets := []any{
 		&node.ID,
 		&node.ParentID,
 		&node.Name,
 		&node.Path,
+		&node.ParentPath,
 		&node.Type,
 		&node.DepthLevel,
 		&node.Size,
@@ -236,7 +239,7 @@ func (db *DB) GetChildrenByParentID(parentID, world string) ([]*types.Node, erro
 	defer db.mu.Unlock()
 
 	query := `
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map
+SELECT id, parent_id, name, path, parent_path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE parent_id = ?
   AND json_extract_string(existence_map, '` + world + `') = 'true'
@@ -259,6 +262,7 @@ ORDER BY type, name`
 			&node.ParentID,
 			&node.Name,
 			&node.Path,
+			&node.ParentPath,
 			&node.Type,
 			&node.DepthLevel,
 			&node.Size,
@@ -301,7 +305,7 @@ func (db *DB) GetParentAndChildren(parentID, world string) ([]*types.Node, error
 	defer db.mu.Unlock()
 
 	query := `
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map
+SELECT id, parent_id, name, path, parent_path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE (id = ? OR parent_id = ?)
   AND json_extract_string(existence_map, '` + world + `') = 'true'
@@ -326,6 +330,7 @@ ORDER BY
 			&node.ParentID,
 			&node.Name,
 			&node.Path,
+			&node.ParentPath,
 			&node.Type,
 			&node.DepthLevel,
 			&node.Size,
@@ -608,8 +613,8 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 	defer tx.Rollback()
 
 	// Build dynamic column list
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 
 	query := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
 		strings.Join(columns, ", "),
@@ -628,18 +633,19 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 			return fmt.Errorf("failed to marshal existence map: %w", err)
 		}
 
-		var checksumVal interface{}
+		var checksumVal any
 		if node.Checksum != nil {
 			checksumVal = *node.Checksum
 		} else {
 			checksumVal = nil
 		}
 
-		values := []interface{}{
+		values := []any{
 			node.ID,
 			node.ParentID,
 			node.Name,
 			node.Path,
+			node.ParentPath,
 			node.Type,
 			node.DepthLevel,
 			node.Size,
@@ -667,7 +673,7 @@ func (db *DB) GetNodeByPath(path, world string) (*types.Node, error) {
 	defer db.mu.Unlock()
 
 	query := `
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map
+SELECT id, parent_id, name, path, parent_path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE path = ?`
 
@@ -688,6 +694,7 @@ WHERE path = ?`
 		&node.ParentID,
 		&node.Name,
 		&node.Path,
+		&node.ParentPath,
 		&node.Type,
 		&node.DepthLevel,
 		&node.Size,

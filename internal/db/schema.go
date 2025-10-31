@@ -13,6 +13,7 @@ func BuildNodesTableSQL(secondaryTables map[string]float64) string {
 		"parent_id VARCHAR NOT NULL",
 		"name VARCHAR NOT NULL",
 		"path VARCHAR NOT NULL",
+		"parent_path VARCHAR NOT NULL",
 		"type VARCHAR NOT NULL CHECK (type IN ('folder', 'file'))",
 		"depth_level INTEGER NOT NULL",
 		"size BIGINT NOT NULL",
@@ -31,6 +32,7 @@ func BuildIndexesSQL(secondaryTables map[string]float64) string {
 		"CREATE INDEX IF NOT EXISTS idx_type ON nodes(type);",
 		"CREATE INDEX IF NOT EXISTS idx_depth_level ON nodes(depth_level);",
 		"CREATE INDEX IF NOT EXISTS idx_path ON nodes(path);",
+		"CREATE INDEX IF NOT EXISTS idx_parent_path ON nodes(parent_path);",
 	}
 
 	return strings.Join(indexes, "\n")

@@ -35,6 +35,7 @@ type Node struct {
 	ParentID          string            `json:"parent_id" db:"parent_id"`            // UUID parent reference
 	Name              string            `json:"name" db:"name"`                      // Display name
 	Path              string            `json:"path" db:"path"`                      // Relative path
+	ParentPath        string            `json:"parent_path" db:"parent_path"`        // Parent path
 	Type              string            `json:"type" db:"type"`                      // "folder" or "file"
 	DepthLevel        int               `json:"depth_level" db:"depth_level"`        // BFS-style depth index
 	Size              int64             `json:"size" db:"size"`                      // File size (0 for folders)

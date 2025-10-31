@@ -229,6 +229,7 @@ func (s *SpectraFS) CreateFolder(req interface {
 		ParentID:     parent.ID,
 		Name:         req.GetName(),
 		Path:         path,
+		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFolder,
 		DepthLevel:   parent.DepthLevel + 1,
 		Size:         0,
@@ -297,6 +298,7 @@ func (s *SpectraFS) UploadFile(req interface {
 		ParentID:     parent.ID,
 		Name:         req.GetName(),
 		Path:         path,
+		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFile,
 		DepthLevel:   parent.DepthLevel + 1,
 		Size:         1024, // 1KB as specified

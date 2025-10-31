@@ -84,6 +84,7 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 		ParentID:     parent.ID,
 		Name:         name,
 		Path:         path,
+		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFolder,
 		DepthLevel:   depth,
 		Size:         0, // Folders have size 0
