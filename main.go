@@ -77,7 +77,7 @@ func runDemo(configPath string) {
 
 	// List root children (this will trigger generation)
 	fmt.Println("\nListing root children (triggering generation)...")
-	result, err := fs.ListChildren("p-root")
+	result, err := fs.ListChildren(&sdk.ListChildrenRequest{ParentID: "root"})
 	if err != nil {
 		log.Printf("Failed to list root children: %v", err)
 	} else {

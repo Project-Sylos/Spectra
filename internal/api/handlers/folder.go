@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Project-Sylos/Spectra/internal/api/models"
+	apimodels "github.com/Project-Sylos/Spectra/internal/api/models"
+	spectrafsmodels "github.com/Project-Sylos/Spectra/internal/spectrafs/models"
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/Project-Sylos/Spectra/sdk"
 )
@@ -25,18 +26,26 @@ func NewFolderHandler(fs *sdk.SpectraFS) *FolderHandler {
 
 // ListChildren handles the list children endpoint
 func (h *FolderHandler) ListChildren(w http.ResponseWriter, req *http.Request) {
-	var request models.ListChildrenRequest
-	if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+	var apiRequest apimodels.ListChildrenRequest
+	if err := json.NewDecoder(req.Body).Decode(&apiRequest); err != nil {
 		h.sendError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	if request.ParentID == "" {
-		h.sendError(w, http.StatusBadRequest, "parent_id is required")
+	// Validate that either parent_id or (parent_path + table_name) is provided
+	if apiRequest.ParentID == "" && (apiRequest.ParentPath == "" || apiRequest.TableName == "") {
+		h.sendError(w, http.StatusBadRequest, "either parent_id or (parent_path + table_name) are required")
 		return
 	}
 
-	result, err := h.fs.ListChildren(request.ParentID)
+	// Convert API model to spectrafs request model
+	spectrafsRequest := &spectrafsmodels.ListChildrenRequest{
+		ParentID:   apiRequest.ParentID,
+		ParentPath: apiRequest.ParentPath,
+		TableName:  apiRequest.TableName,
+	}
+
+	result, err := h.fs.ListChildren(spectrafsRequest)
 	if err != nil {
 		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to list children: %v", err))
 		return
@@ -47,19 +56,32 @@ func (h *FolderHandler) ListChildren(w http.ResponseWriter, req *http.Request) {
 
 // CreateFolder handles the create folder endpoint
 func (h *FolderHandler) CreateFolder(w http.ResponseWriter, req *http.Request) {
-	var request models.CreateFolderRequest
-	if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+	var apiRequest apimodels.CreateFolderRequest
+	if err := json.NewDecoder(req.Body).Decode(&apiRequest); err != nil {
 		h.sendError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	if request.ParentID == "" || request.Name == "" {
-		h.sendError(w, http.StatusBadRequest, "parent_id and name are required")
+	// Validate that either parent_id or (parent_path + table_name) is provided
+	if apiRequest.ParentID == "" && (apiRequest.ParentPath == "" || apiRequest.TableName == "") {
+		h.sendError(w, http.StatusBadRequest, "either parent_id or (parent_path + table_name) are required")
 		return
 	}
 
-	// Create folder using the proper CreateFolder method
-	folder, err := h.fs.CreateFolder(request.ParentID, request.Name)
+	if apiRequest.Name == "" {
+		h.sendError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Convert API model to spectrafs request model
+	spectrafsRequest := &spectrafsmodels.CreateFolderRequest{
+		ParentID:   apiRequest.ParentID,
+		ParentPath: apiRequest.ParentPath,
+		TableName:  apiRequest.TableName,
+		Name:       apiRequest.Name,
+	}
+
+	folder, err := h.fs.CreateFolder(spectrafsRequest)
 	if err != nil {
 		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create folder: %v", err))
 		return

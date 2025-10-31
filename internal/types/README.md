@@ -16,18 +16,26 @@ The fundamental data structure representing filesystem nodes:
 
 ```go
 type Node struct {
-    ID                    string            `json:"id" db:"id"`
-    ParentID              string            `json:"parent_id" db:"parent_id"`
-    Name                  string            `json:"name" db:"name"`
-    Path                  string            `json:"path" db:"path"`
-    Type                  string            `json:"type" db:"type"`
-    DepthLevel            int               `json:"depth_level" db:"depth_level"`
-    Size                  int64             `json:"size" db:"size"`
-    LastUpdated           time.Time         `json:"last_updated" db:"last_updated"`
-    TraversalStatus       string            `json:"traversal_status" db:"traversal_status"`
-    SecondaryExistenceMap map[string]bool   `json:"secondary_existence_map" db:"secondary_existence_map"`
+    ID                string            `json:"id" db:"id"`
+    ParentID          string            `json:"parent_id" db:"parent_id"`
+    Name              string            `json:"name" db:"name"`
+    Path              string            `json:"path" db:"path"`
+    Type              string            `json:"type" db:"type"`
+    DepthLevel        int               `json:"depth_level" db:"depth_level"`
+    Size              int64             `json:"size" db:"size"`
+    LastUpdated       time.Time         `json:"last_updated" db:"last_updated"`
+    Checksum          *string           `json:"checksum" db:"checksum"`
+    ExistenceMap      map[string]bool   `json:"existence_map" db:"existence_map"`
+    TraversalStatuses map[string]string `json:"traversal_statuses,omitempty" db:"-"`
+    CopyStatus        string            `json:"copy_status" db:"copy_status"`
 }
 ```
+
+**Key Changes:**
+- `ID` is now a plain UUID (no prefixes like `p-` or `s1-`)
+- `ExistenceMap` tracks which worlds the node exists in (e.g., `{"primary": true, "s1": true}`)
+- `TraversalStatuses` is an in-memory map for per-world traversal states
+- `CopyStatus` tracks migration status ("pending", "in_progress", "completed")
 
 ### Configuration
 Multi-section configuration structure:
@@ -84,21 +92,15 @@ type ListResult struct {
 - `StatusSuccessful` - "successful"
 - `StatusFailed` - "failed"
 
-### ID Prefixes
-- `PrimaryPrefix` - "p-"
-- `SecondaryPrefix` - "s"
+### Copy Status
+- `CopyStatusPending` - "pending"
+- `CopyStatusInProgress` - "in_progress"
+- `CopyStatusCompleted` - "completed"
 
 ## Helper Functions
 
-### ID Parsing
-- `IsPrimaryID(id)` - Check if ID is primary table format
-- `IsSecondaryID(id)` - Check if ID is secondary table format
-- `GetTableFromID(id)` - Extract table name from ID
-- `GetUUIDFromID(id)` - Extract UUID from ID
-
 ### Table Management
-- `GetTableName(tableName)` - Get full table name with prefix
-- `GetSecondaryTableName(prefix)` - Get secondary table name
+- `GetTableName(world)` - Always returns "nodes" (single table architecture)
 
 ## Usage
 

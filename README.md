@@ -16,38 +16,42 @@ This design allows engineers to stress-test migration engines (such as Sylos) wi
 
 * **Procedural Generation:** Randomly creates folder and file hierarchies using a seeded RNG for reproducibility.
 * **Deterministic Mode:** When given a seed, the same folder structure is regenerated identically across runs.
-* **Multi-Table Architecture:** Primary and secondary tables with probability-based data distribution.
+* **Unified Single-Table Architecture:** One table with world-based existence tracking for optimal performance.
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
 * **DuckDB Persistence:** Each node is stored in a local DuckDB database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out, file size ranges, and naming schemes through the config file or API.
 * **Instant Cleanup:** Simple teardown between tests — delete the DuckDB file and regenerate.
-* **UUID-based IDs:** Consistent unique identifiers across primary and secondary tables.
+* **Plain UUID IDs:** Simple unique identifiers without prefixes.
+* **Optimized Queries:** Vectorized queries reduce database round trips by 3-4x.
 
 ---
 
 ## Architecture
 
-### Multi-Table Design
+### Single-Table Design
 
-Spectra uses a sophisticated multi-table architecture:
+Spectra uses an optimized single-table architecture for maximum performance:
 
-- **Primary Table (`nodes_primary`)**: Contains all nodes with `p-{UUID}` IDs
-- **Secondary Tables (`nodes_s1`, `nodes_s2`, etc.)**: Contains probability-based subsets with `s1-{UUID}`, `s2-{UUID}` IDs
-- **Secondary Existence Map**: JSON column in primary table tracking which secondary tables contain each node
+- **Unified `nodes` Table**: All nodes stored in one table with plain UUID IDs
+- **Existence Map**: JSON column tracking which "worlds" (primary, s1, s2, etc.) each node exists in
+- **Dynamic Traversal Columns**: Per-world traversal status columns (`traversal_primary`, `traversal_s1`, etc.)
+- **World-Based Filtering**: Queries filter nodes by world using JSON operations on `existence_map`
 
 ### Probability-Based Generation
 
 When generating children:
-1. Generate primary nodes based on configuration rules
-2. For each primary node, roll dice against secondary table probabilities
-3. Create secondary nodes only if probability check passes
-4. Update primary node's `secondary_existence_map` to track secondary existence
+1. Generate nodes based on configuration rules
+2. For each node, roll dice against world probabilities
+3. Populate `existence_map` with results: `{"primary": true, "s1": true, "s2": false}`
+4. Insert all nodes in a single bulk operation
 
-### Table Detection Logic
+### World-Aware Operations
 
-The system automatically determines which table to query based on node ID prefixes:
-- `p-` → Primary table
-- `s1-`, `s2-`, etc. → Corresponding secondary tables
+The system filters nodes by "world" context:
+- Default world is "primary"
+- Operations can specify target world (s1, s2, etc.)
+- Nodes can exist in multiple worlds simultaneously
+- Traversal status tracked independently per world
 
 ---
 
@@ -97,20 +101,23 @@ Spectra/
 
 ### Node Generation
 
-Spectra represents all nodes as entries in DuckDB tables:
+Spectra represents all nodes as entries in a unified DuckDB table:
 
-| Column             | Type      | Description                                     |
-| ------------------ | --------- | ----------------------------------------------- |
-| `id`               | string    | UUID-based identifier (p-{uuid}, s1-{uuid}, etc.) |
-| `parent_id`        | string    | ID of parent folder                             |
-| `name`             | string    | Display name                                    |
-| `path`             | string    | Relative path (root-relative, not absolute)     |
-| `type`             | string    | `"folder"` or `"file"`                          |
-| `depth_level`      | int       | BFS-style depth index                           |
-| `size`             | int64     | File size (0 for folders)                       |
-| `last_updated`     | timestamp | Synthetic timestamp                             |
-| `traversal_status` | string    | `"pending"`, `"successful"`, `"failed"`         |
-| `secondary_existence_map` | JSON | Map tracking secondary table presence |
+| Column               | Type      | Description                                              |
+| -------------------- | --------- | -------------------------------------------------------- |
+| `id`                 | string    | Plain UUID identifier                                    |
+| `parent_id`          | string    | UUID of parent folder                                    |
+| `name`               | string    | Display name                                             |
+| `path`               | string    | Relative path (root-relative, not absolute)              |
+| `type`               | string    | `"folder"` or `"file"`                                   |
+| `depth_level`        | int       | BFS-style depth index                                    |
+| `size`               | int64     | File size (0 for folders)                                |
+| `last_updated`       | timestamp | Synthetic timestamp                                      |
+| `checksum`           | string    | SHA256 checksum (for files only)                         |
+| `existence_map`      | JSON      | Map tracking world existence: `{"primary":true,"s1":true}` |
+| `traversal_primary`  | string    | Primary world traversal status                           |
+| `traversal_s1`, etc. | string    | Per-world traversal status (dynamic columns)             |
+| `copy_status`        | string    | Migration status: `"pending"`, `"in_progress"`, `"completed"` |
 
 ### Example Behavior
 
@@ -138,7 +145,7 @@ Given a config:
 }
 ```
 
-Spectra will generate a reproducible tree up to 4 levels deep, where each folder contains between 1–3 subfolders and 2–5 files. Secondary tables will contain 70% and 30% of the nodes respectively, based on probability rolls.
+Spectra will generate a reproducible tree up to 4 levels deep, where each folder contains between 1–3 subfolders and 2–5 files. Each node will have a 70% chance of existing in the s1 world and a 30% chance of existing in the s2 world, tracked in its `existence_map`.
 
 ---
 
@@ -171,11 +178,11 @@ Spectra will generate a reproducible tree up to 4 levels deep, where each folder
 ```go
 type SpectraFS struct {
     // Core operations
-    ListChildren(parentID string) (*ListResult, error)
-    GetNode(id string) (*Node, error)
-    CreateFolder(parentID, name string) (*Node, error)
-    UploadFile(parentID, name string, data []byte) (*Node, error)
-    DeleteNode(id string) error
+    ListChildren(req *ListChildrenRequest) (*ListResult, error)
+    GetNode(req *GetNodeRequest) (*Node, error)
+    CreateFolder(req *CreateFolderRequest) (*Node, error)
+    UploadFile(req *UploadFileRequest) (*Node, error)
+    DeleteNode(req *DeleteNodeRequest) error
     
     // System operations
     Reset() error
@@ -184,6 +191,77 @@ type SpectraFS struct {
     GetNodeCount(tableName string) (int, error)
 }
 ```
+
+#### Request Types
+
+All CRUD operations use simple request structs that support flexible lookup methods through a clean interface-based design:
+
+**GetNodeRequest** - Retrieve a node by ID or Path+World
+```go
+// By ID (plain UUID)
+req := &sdk.GetNodeRequest{
+    ID: "root",
+}
+// OR by Path in specific world
+req := &sdk.GetNodeRequest{
+    Path:      "/",
+    TableName: "s1",  // TableName specifies the world
+}
+node, err := fs.GetNode(req)
+```
+
+**ListChildrenRequest** - List children of a parent node
+```go
+// By ParentID (plain UUID)
+req := &sdk.ListChildrenRequest{
+    ParentID: "root",
+}
+// OR by ParentPath in specific world
+req := &sdk.ListChildrenRequest{
+    ParentPath: "/",
+    TableName:  "s1",  // Defaults to "primary" if not specified
+}
+result, err := fs.ListChildren(req)
+```
+
+**CreateFolderRequest** - Create a new folder
+```go
+req := &sdk.CreateFolderRequest{
+    ParentID: "root",  // OR ParentPath + TableName
+    Name:     "new-folder",
+}
+folder, err := fs.CreateFolder(req)
+// folder.ExistenceMap will contain world existence based on probabilities
+```
+
+**UploadFileRequest** - Upload a file
+```go
+req := &sdk.UploadFileRequest{
+    ParentID: "root",  // OR ParentPath + TableName
+    Name:     "test.txt",
+    Data:     []byte("file content"),
+}
+file, err := fs.UploadFile(req)
+```
+
+**DeleteNodeRequest** - Delete a node
+```go
+req := &sdk.DeleteNodeRequest{
+    ID: "abc123-...",  // Plain UUID
+}
+err := fs.DeleteNode(req)
+```
+
+**UpdateTraversalStatusRequest** - Update node traversal status for a world
+```go
+req := &sdk.UpdateTraversalStatusRequest{
+    ID:     "abc123-...",  // Plain UUID
+    Status: "successful",  // "pending", "successful", or "failed"
+}
+err := fs.UpdateTraversalStatus(req)
+```
+
+**Design Note:** Each request struct implements the appropriate interfaces (`NodeIdentifier`, `ParentIdentifier`, etc.) for compile-time type safety and runtime validation. Users can pass any struct that implements these interfaces.
 
 ---
 
@@ -215,21 +293,21 @@ go run cmd/api/main.go configs/custom.json
 ```bash
 curl -X POST http://localhost:8086/api/v1/folder/list \
   -H "Content-Type: application/json" \
-  -d '{"parent_id": "p-root"}'
+  -d '{"parent_id": "root"}'
 ```
 
 #### Create Folder
 ```bash
 curl -X POST http://localhost:8086/api/v1/folder/create \
   -H "Content-Type: application/json" \
-  -d '{"parent_id": "p-root", "name": "new-folder"}'
+  -d '{"parent_id": "root", "name": "new-folder"}'
 ```
 
 #### Upload File
 ```bash
 curl -X POST http://localhost:8086/api/v1/file/upload \
   -H "Content-Type: application/json" \
-  -d '{"parent_id": "p-root", "name": "test.txt", "data": "SGVsbG8gV29ybGQ="}'
+  -d '{"parent_id": "root", "name": "test.txt", "data": "SGVsbG8gV29ybGQ="}'
 ```
 
 ---

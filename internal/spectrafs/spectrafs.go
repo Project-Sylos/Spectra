@@ -7,6 +7,7 @@ import (
 	"github.com/Project-Sylos/Spectra/internal/config"
 	"github.com/Project-Sylos/Spectra/internal/db"
 	"github.com/Project-Sylos/Spectra/internal/generator"
+	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/google/uuid"
 )
@@ -28,61 +29,73 @@ func NewSpectraFS(configPath string) (*SpectraFS, error) {
 	}
 
 	// Initialize database with secondary tables
+	// Note: InitializeSchema() already creates root nodes automatically
 	database, err := db.New(cfg.Seed.DBPath, cfg.SecondaryTables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
-	}
-
-	// Create root node if it doesn't exist
-	rootExists, err := database.CheckChildrenExist("p-root")
-	if err != nil {
-		database.Close()
-		return nil, fmt.Errorf("failed to check root existence: %w", err)
-	}
-
-	if !rootExists {
-		if err := database.CreateRootNode(); err != nil {
-			database.Close()
-			return nil, fmt.Errorf("failed to create root node: %w", err)
-		}
 	}
 
 	// Initialize seeded random number generator
 	rng := generator.NewRNG(cfg.Seed.Seed)
 
 	return &SpectraFS{
-		root: "p-root",
+		root: "root",
 		db:   database,
 		cfg:  cfg,
 		rng:  rng,
 	}, nil
 }
 
-// ListChildren implements the enhanced API with multi-table support
-// Returns success/failure response with proper error handling
-func (s *SpectraFS) ListChildren(parentID string) (*types.ListResult, error) {
-	// First, verify the parent node exists
-	parent, err := s.db.GetNodeByID(parentID)
-	if err != nil {
+// ListChildren retrieves children for a parent node in a specific world
+// This is the OPTIMIZED single-table version with minimal DB queries
+// Accepts any struct that implements the ParentIdentifier interface
+func (s *SpectraFS) ListChildren(req models.ParentIdentifier) (*types.ListResult, error) {
+	// Validate request
+	if err := models.ValidateParentIdentifier(req); err != nil {
 		return &types.ListResult{
 			Success: false,
-			Message: fmt.Sprintf("Parent node not found: %s", parentID),
+			Message: err.Error(),
 		}, nil
 	}
 
-	// Check if children already exist in the appropriate table
-	childrenExist, err := s.db.CheckChildrenExist(parentID)
+	// Resolve the parent node and extract world from request
+	parent, world, err := s.resolveNodeAndWorld(req)
 	if err != nil {
 		return &types.ListResult{
 			Success: false,
-			Message: fmt.Sprintf("Failed to check children existence: %v", err),
+			Message: fmt.Sprintf("Parent node not found: %v", err),
 		}, nil
 	}
 
-	// If children don't exist, generate them
-	if !childrenExist {
-		// Generate children in primary table
-		children, err := generator.GenerateChildren(parent, parent.DepthLevel, s.rng, s.cfg)
+	// Check if parent exists in the requested world
+	if !parent.ExistenceMap[world] {
+		return &types.ListResult{
+			Success: true,
+			Message: fmt.Sprintf("Node does not exist in world %s", world),
+			Folders: make([]types.Folder, 0),
+			Files:   make([]types.File, 0),
+		}, nil
+	}
+
+	// OPTIMIZATION: Get parent + children in ONE query
+	nodes, err := s.db.GetParentAndChildren(parent.ID, world)
+	if err != nil {
+		return &types.ListResult{
+			Success: false,
+			Message: fmt.Sprintf("Failed to get parent and children: %v", err),
+		}, nil
+	}
+
+	// First node is parent (if found), rest are children
+	var children []*types.Node
+	if len(nodes) > 0 {
+		// nodes[0] is the parent, nodes[1:] are children
+		children = nodes[1:]
+	}
+
+	// If no children exist, generate them
+	if len(children) == 0 {
+		generated, err := generator.GenerateChildren(parent, parent.DepthLevel, s.rng, s.cfg)
 		if err != nil {
 			return &types.ListResult{
 				Success: false,
@@ -90,56 +103,26 @@ func (s *SpectraFS) ListChildren(parentID string) (*types.ListResult, error) {
 			}, nil
 		}
 
-		// Process each child for secondary table generation
-		for _, child := range children {
-			// Insert into primary table
-			if err := s.db.InsertPrimaryNode(child); err != nil {
-				return &types.ListResult{
-					Success: false,
-					Message: fmt.Sprintf("Failed to insert primary child node: %v", err),
-				}, nil
-			}
+		// OPTIMIZATION: Bulk insert all nodes in ONE transaction
+		if err := s.db.BulkInsertNodes(generated); err != nil {
+			return &types.ListResult{
+				Success: false,
+				Message: fmt.Sprintf("Failed to bulk insert nodes: %v", err),
+			}, nil
+		}
 
-			// Generate secondary nodes based on probability
-			secondaryNodes, err := generator.GenerateSecondaryNodes(child, s.cfg, s.rng)
-			if err != nil {
-				return &types.ListResult{
-					Success: false,
-					Message: fmt.Sprintf("Failed to generate secondary nodes: %v", err),
-				}, nil
-			}
-
-			// Update secondary existence map in primary node
-			existenceMap := make(map[string]bool)
-			for tableName, secondaryNode := range secondaryNodes {
-				existenceMap[tableName] = true
-
-				// Insert into secondary table
-				if err := s.db.InsertSecondaryNode(tableName, secondaryNode); err != nil {
-					return &types.ListResult{
-						Success: false,
-						Message: fmt.Sprintf("Failed to insert secondary node into %s: %v", tableName, err),
-					}, nil
-				}
-			}
-
-			// Update primary node with secondary existence map
-			if err := s.db.UpdateSecondaryExistenceMap(child.ID, existenceMap); err != nil {
-				return &types.ListResult{
-					Success: false,
-					Message: fmt.Sprintf("Failed to update secondary existence map: %v", err),
-				}, nil
+		// Filter children by requested world
+		for _, node := range generated {
+			if node.ExistenceMap[world] {
+				children = append(children, node)
 			}
 		}
 	}
 
-	// Retrieve children from the appropriate table
-	children, err := s.db.GetChildrenByParentID(parentID)
-	if err != nil {
-		return &types.ListResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to retrieve children: %v", err),
-		}, nil
+	// Mark parent as traversed (conditional update - only if not already successful)
+	if err := s.updateTraversalStatus(parent.ID, world, types.StatusSuccessful); err != nil {
+		// Don't fail the whole operation if status update fails
+		fmt.Printf("Warning: Failed to update traversal status: %v\n", err)
 	}
 
 	// Separate folders and files
@@ -162,9 +145,27 @@ func (s *SpectraFS) ListChildren(parentID string) (*types.ListResult, error) {
 	return result, nil
 }
 
-// GetNode retrieves a node by ID from the appropriate table
-func (s *SpectraFS) GetNode(id string) (*types.Node, error) {
-	return s.db.GetNodeByID(id)
+// GetNode retrieves a node using either ID or Path+World
+// Accepts any struct that implements the NodeIdentifier interface
+func (s *SpectraFS) GetNode(req models.NodeIdentifier) (*types.Node, error) {
+	if err := models.ValidateNodeIdentifier(req); err != nil {
+		return nil, err
+	}
+
+	id := req.GetID()
+	path := req.GetPath()
+	tableName := req.GetTableName()
+
+	if id != "" {
+		return s.db.GetNodeByID(id)
+	} else if path != "" {
+		if tableName == "" {
+			tableName = "primary" // Default to primary world
+		}
+		return s.db.GetNodeByPath(path, tableName)
+	}
+
+	return nil, fmt.Errorf("either id or path must be specified")
 }
 
 // GetFileData generates 1KB random data and checksum for a file (not persisted)
@@ -188,117 +189,133 @@ func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
 }
 
 // CreateFolder creates a new folder node
-func (s *SpectraFS) CreateFolder(parentID, name string) (*types.Node, error) {
-	// Verify parent exists and is a folder
-	parent, err := s.db.GetNodeByID(parentID)
+// Accepts any struct that implements ParentIdentifier and NamedRequest interfaces
+func (s *SpectraFS) CreateFolder(req interface {
+	models.ParentIdentifier
+	models.NamedRequest
+}) (*types.Node, error) {
+	if err := models.ValidateParentIdentifier(req); err != nil {
+		return nil, err
+	}
+	if req.GetName() == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	// Resolve parent node
+	parent, _, err := s.resolveNodeAndWorld(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get parent node: %w", err)
 	}
 
 	if parent.Type != types.NodeTypeFolder {
-		return nil, fmt.Errorf("parent %s is not a folder", parentID)
+		return nil, fmt.Errorf("parent %s is not a folder", parent.ID)
 	}
 
-	// Create folder node
-	folderNode, err := s.db.CreateFolder(parentID, name, parent.DepthLevel+1)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create folder node: %w", err)
+	// Create folder node with UUID
+	nodeID := uuid.New().String()
+	var path string
+	if parent.Path == "/" {
+		path = fmt.Sprintf("/%s", req.GetName())
+	} else {
+		path = fmt.Sprintf("%s/%s", parent.Path, req.GetName())
 	}
 
-	// Insert primary node
-	if err := s.db.InsertPrimaryNode(folderNode); err != nil {
-		return nil, fmt.Errorf("failed to insert primary folder node: %w", err)
-	}
-
-	// Generate secondary nodes based on probabilities
-	secondaryNodes, err := generator.GenerateSecondaryNodes(folderNode, s.cfg, s.rng)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate secondary nodes: %w", err)
-	}
-
-	// Insert secondary nodes
-	for tableName, secondaryNode := range secondaryNodes {
-		if err := s.db.InsertSecondaryNode(tableName, secondaryNode); err != nil {
-			return nil, fmt.Errorf("failed to insert secondary node into %s: %w", tableName, err)
+	// Roll dice for existence in each world
+	existenceMap := make(map[string]bool)
+	existenceMap["primary"] = true
+	for worldName, probability := range s.cfg.SecondaryTables {
+		roll := s.rng.Float64()
+		if roll <= probability {
+			existenceMap[worldName] = true
 		}
 	}
 
-	// Update secondary existence map in primary node
-	existenceMap := make(map[string]bool)
-	for tableName := range secondaryNodes {
-		existenceMap[tableName] = true
+	folderNode := &types.Node{
+		ID:           nodeID,
+		ParentID:     parent.ID,
+		Name:         req.GetName(),
+		Path:         path,
+		Type:         types.NodeTypeFolder,
+		DepthLevel:   parent.DepthLevel + 1,
+		Size:         0,
+		LastUpdated:  time.Now(),
+		Checksum:     nil,
+		ExistenceMap: existenceMap,
+		CopyStatus:   types.CopyStatusPending,
 	}
-	folderNode.SecondaryExistenceMap = existenceMap
 
-	if err := s.db.UpdateSecondaryExistenceMap(folderNode.ID, existenceMap); err != nil {
-		return nil, fmt.Errorf("failed to update secondary existence map: %w", err)
+	// Insert node
+	if err := s.db.InsertNode(folderNode); err != nil {
+		return nil, fmt.Errorf("failed to insert folder node: %w", err)
 	}
 
 	return folderNode, nil
 }
 
-// UploadFile handles file uploads with multi-table support
-func (s *SpectraFS) UploadFile(parentID, name string, data []byte) (*types.Node, error) {
-	// Verify parent exists and is a folder
-	parent, err := s.db.GetNodeByID(parentID)
+// UploadFile handles file uploads with single-table support
+// Accepts any struct that implements ParentIdentifier, NamedRequest, and DataRequest interfaces
+func (s *SpectraFS) UploadFile(req interface {
+	models.ParentIdentifier
+	models.NamedRequest
+	models.DataRequest
+}) (*types.Node, error) {
+	if err := models.ValidateParentIdentifier(req); err != nil {
+		return nil, err
+	}
+	if req.GetName() == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	if len(req.GetData()) == 0 {
+		return nil, fmt.Errorf("data is required")
+	}
+
+	// Resolve parent node
+	parent, _, err := s.resolveNodeAndWorld(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get parent node: %w", err)
 	}
 
 	if parent.Type != types.NodeTypeFolder {
-		return nil, fmt.Errorf("parent %s is not a folder", parentID)
+		return nil, fmt.Errorf("parent %s is not a folder", parent.ID)
 	}
 
 	// Generate UUID for the new file
-	fileUUID := uuid.New().String()
-	primaryID := types.PrimaryPrefix + fileUUID
+	nodeID := uuid.New().String()
+	path := fmt.Sprintf("%s/%s", parent.Path, req.GetName())
 
-	// Create file node
-	path := fmt.Sprintf("%s/%s", parent.Path, name)
-	fileNode := &types.Node{
-		ID:                    primaryID,
-		ParentID:              parentID,
-		Name:                  name,
-		Path:                  path,
-		Type:                  types.NodeTypeFile,
-		DepthLevel:            parent.DepthLevel + 1,
-		Size:                  1024, // 1KB as specified
-		LastUpdated:           time.Now(),
-		TraversalStatus:       types.StatusPending,
-		SecondaryExistenceMap: make(map[string]bool),
-	}
-
-	// Insert into primary table
-	if err := s.db.InsertPrimaryNode(fileNode); err != nil {
-		return nil, fmt.Errorf("failed to insert uploaded file node: %w", err)
-	}
-
-	// Generate secondary nodes based on probability
-	secondaryNodes, err := generator.GenerateSecondaryNodes(fileNode, s.cfg, s.rng)
+	// Generate checksum (data not persisted)
+	_, checksum, err := generator.GenerateFileDataForUpload(req.GetData(), s.rng)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate secondary nodes: %w", err)
+		return nil, fmt.Errorf("failed to generate file data: %w", err)
 	}
 
-	// Update secondary existence map
+	// Roll dice for existence in each world
 	existenceMap := make(map[string]bool)
-	for tableName, secondaryNode := range secondaryNodes {
-		existenceMap[tableName] = true
-
-		// Insert into secondary table
-		if err := s.db.InsertSecondaryNode(tableName, secondaryNode); err != nil {
-			return nil, fmt.Errorf("failed to insert secondary node into %s: %w", tableName, err)
+	existenceMap["primary"] = true
+	for worldName, probability := range s.cfg.SecondaryTables {
+		roll := s.rng.Float64()
+		if roll <= probability {
+			existenceMap[worldName] = true
 		}
 	}
 
-	// Update primary node with secondary existence map
-	if err := s.db.UpdateSecondaryExistenceMap(fileNode.ID, existenceMap); err != nil {
-		return nil, fmt.Errorf("failed to update secondary existence map: %w", err)
+	fileNode := &types.Node{
+		ID:           nodeID,
+		ParentID:     parent.ID,
+		Name:         req.GetName(),
+		Path:         path,
+		Type:         types.NodeTypeFile,
+		DepthLevel:   parent.DepthLevel + 1,
+		Size:         1024, // 1KB as specified
+		LastUpdated:  time.Now(),
+		Checksum:     &checksum,
+		ExistenceMap: existenceMap,
+		CopyStatus:   types.CopyStatusPending,
 	}
 
-	// Note: checksum is computed but not stored in DB per current design
-	_, _, err = generator.GenerateFileDataForUpload(data, s.rng)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate file data for upload: %w", err)
+	// Insert node
+	if err := s.db.InsertNode(fileNode); err != nil {
+		return nil, fmt.Errorf("failed to insert uploaded file node: %w", err)
 	}
 
 	return fileNode, nil
@@ -306,12 +323,12 @@ func (s *SpectraFS) UploadFile(parentID, name string, data []byte) (*types.Node,
 
 // Reset clears all nodes and recreates the root
 func (s *SpectraFS) Reset() error {
-	// Delete all nodes from all tables
+	// Delete all nodes
 	if err := s.db.DeleteAllNodes(); err != nil {
 		return fmt.Errorf("failed to delete all nodes: %w", err)
 	}
 
-	// Recreate root node
+	// Recreate single root node with all worlds
 	if err := s.db.CreateRootNode(); err != nil {
 		return fmt.Errorf("failed to recreate root node: %w", err)
 	}
@@ -332,9 +349,9 @@ func (s *SpectraFS) GetConfig() *types.Config {
 	return s.cfg
 }
 
-// GetNodeCount returns the total number of nodes in a specific table
-func (s *SpectraFS) GetNodeCount(tableName string) (int, error) {
-	return s.db.GetNodeCount(tableName)
+// GetNodeCount returns the total number of nodes in a specific world
+func (s *SpectraFS) GetNodeCount(world string) (int, error) {
+	return s.db.GetNodeCount(world)
 }
 
 // GetTableInfo returns information about all tables
@@ -342,25 +359,89 @@ func (s *SpectraFS) GetTableInfo() ([]types.TableInfo, error) {
 	return s.db.GetTableInfo()
 }
 
-// UpdateTraversalStatus updates the traversal status of a node
-func (s *SpectraFS) UpdateTraversalStatus(id, status string) error {
+// updateTraversalStatus updates the traversal status of a node for a specific world
+// This is a private method - traversal status is managed automatically by ListChildren
+func (s *SpectraFS) updateTraversalStatus(nodeID, world, status string) error {
 	// Validate status
 	if status != types.StatusPending && status != types.StatusSuccessful && status != types.StatusFailed {
 		return fmt.Errorf("invalid traversal status: %s", status)
 	}
-	return s.db.UpdateTraversalStatus(id, status)
+
+	return s.db.UpdateTraversalStatus(nodeID, world, status)
 }
 
-// DeleteNode deletes a node by its ID
-func (s *SpectraFS) DeleteNode(id string) error {
+// DeleteNode deletes a node using either ID or Path+World
+// Accepts any struct that implements the NodeIdentifier interface
+func (s *SpectraFS) DeleteNode(req models.NodeIdentifier) error {
+	if err := models.ValidateNodeIdentifier(req); err != nil {
+		return err
+	}
+
+	// Resolve node to get its ID
+	node, _, err := s.resolveNodeAndWorld(req)
+	if err != nil {
+		return fmt.Errorf("failed to resolve node: %w", err)
+	}
+
 	// Prevent deletion of root node
-	if id == "p-root" {
+	if node.ID == "root" {
 		return fmt.Errorf("cannot delete root node")
 	}
-	return s.db.DeleteNode(id)
+	return s.db.DeleteNode(node.ID)
 }
 
 // GetSecondaryTables returns the list of secondary table names
 func (s *SpectraFS) GetSecondaryTables() []string {
 	return s.db.GetSecondaryTables()
+}
+
+// resolveNodeAndWorld resolves a node and world from a request using interfaces
+// Supports both NodeIdentifier (for ID or Path+World) and ParentIdentifier (for ParentID or ParentPath+World)
+// Returns the node and the world name (defaults to "primary" if not specified)
+func (s *SpectraFS) resolveNodeAndWorld(req interface{}) (*types.Node, string, error) {
+	var node *types.Node
+	var world string
+	var err error
+
+	// Try NodeIdentifier first (for GetNode, DeleteNode, UpdateTraversalStatus)
+	if nodeID, ok := req.(models.NodeIdentifier); ok {
+		id := nodeID.GetID()
+		path := nodeID.GetPath()
+		world = nodeID.GetTableName() // TableName is used for world name
+
+		if world == "" {
+			world = "primary" // Default to primary world
+		}
+
+		if id != "" {
+			node, err = s.db.GetNodeByID(id)
+		} else if path != "" {
+			node, err = s.db.GetNodeByPath(path, world)
+		} else {
+			return nil, "", fmt.Errorf("either id or path must be specified")
+		}
+		return node, world, err
+	}
+
+	// Try ParentIdentifier (for ListChildren, CreateFolder, UploadFile)
+	if parentID, ok := req.(models.ParentIdentifier); ok {
+		parentIDStr := parentID.GetParentID()
+		parentPath := parentID.GetParentPath()
+		world = parentID.GetTableName() // TableName is used for world name
+
+		if world == "" {
+			world = "primary" // Default to primary world
+		}
+
+		if parentIDStr != "" {
+			node, err = s.db.GetNodeByID(parentIDStr)
+		} else if parentPath != "" {
+			node, err = s.db.GetNodeByPath(parentPath, world)
+		} else {
+			return nil, "", fmt.Errorf("either parent_id or parent_path must be specified")
+		}
+		return node, world, err
+	}
+
+	return nil, "", fmt.Errorf("unsupported request type - must implement NodeIdentifier or ParentIdentifier")
 }

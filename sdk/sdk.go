@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Project-Sylos/Spectra/internal/spectrafs"
+	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
 	"github.com/Project-Sylos/Spectra/internal/types"
 )
 
@@ -31,14 +32,13 @@ func NewWithDefaults() (*SpectraFS, error) {
 }
 
 // ListChildren returns the children of a given parent node
-// This implements the API interface from readme lines 91-94
-func (s *SpectraFS) ListChildren(parentID string) (*types.ListResult, error) {
-	return s.impl.ListChildren(parentID)
+func (s *SpectraFS) ListChildren(req *models.ListChildrenRequest) (*types.ListResult, error) {
+	return s.impl.ListChildren(req)
 }
 
-// GetNode retrieves a node by its ID
-func (s *SpectraFS) GetNode(id string) (*types.Node, error) {
-	return s.impl.GetNode(id)
+// GetNode retrieves a node using either ID or Path+TableName
+func (s *SpectraFS) GetNode(req *models.GetNodeRequest) (*types.Node, error) {
+	return s.impl.GetNode(req)
 }
 
 // GetFileData generates and returns file data with checksum for a given file ID
@@ -48,14 +48,14 @@ func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
 }
 
 // CreateFolder creates a new folder node
-func (s *SpectraFS) CreateFolder(parentID, name string) (*types.Node, error) {
-	return s.impl.CreateFolder(parentID, name)
+func (s *SpectraFS) CreateFolder(req *models.CreateFolderRequest) (*types.Node, error) {
+	return s.impl.CreateFolder(req)
 }
 
 // UploadFile handles file uploads - processes the data and creates a file node
 // The actual file data is not persisted, only metadata
-func (s *SpectraFS) UploadFile(parentID, name string, data []byte) (*types.Node, error) {
-	return s.impl.UploadFile(parentID, name, data)
+func (s *SpectraFS) UploadFile(req *models.UploadFileRequest) (*types.Node, error) {
+	return s.impl.UploadFile(req)
 }
 
 // Reset clears all nodes and recreates the root
@@ -88,14 +88,9 @@ func (s *SpectraFS) GetSecondaryTables() []string {
 	return s.impl.GetSecondaryTables()
 }
 
-// DeleteNode deletes a node by its ID
-func (s *SpectraFS) DeleteNode(id string) error {
-	return s.impl.DeleteNode(id)
-}
-
-// UpdateTraversalStatus updates the traversal status of a node
-func (s *SpectraFS) UpdateTraversalStatus(id, status string) error {
-	return s.impl.UpdateTraversalStatus(id, status)
+// DeleteNode deletes a node using either ID or Path+World
+func (s *SpectraFS) DeleteNode(req *models.DeleteNodeRequest) error {
+	return s.impl.DeleteNode(req)
 }
 
 // Re-export types for convenience
@@ -107,6 +102,15 @@ type (
 	ListResult  = types.ListResult
 	TableInfo   = types.TableInfo
 	APIResponse = types.APIResponse
+)
+
+// Re-export request models
+type (
+	GetNodeRequest      = models.GetNodeRequest
+	ListChildrenRequest = models.ListChildrenRequest
+	CreateFolderRequest = models.CreateFolderRequest
+	UploadFileRequest   = models.UploadFileRequest
+	DeleteNodeRequest   = models.DeleteNodeRequest
 )
 
 // Re-export constants

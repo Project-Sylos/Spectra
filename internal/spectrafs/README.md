@@ -12,57 +12,66 @@ spectrafs/
 ## Core Responsibilities
 
 - **Orchestration**: Coordinates between database, generator, and configuration layers
-- **Multi-Table Management**: Handles primary and secondary table operations
+- **World-Aware Operations**: Filters nodes by world (primary, s1, s2, etc.)
 - **Lazy Generation**: Generates children on-demand when requested
-- **State Management**: Manages filesystem state and traversal status
+- **State Management**: Manages filesystem state and per-world traversal status
 - **API Integration**: Provides the interface used by the SDK
 
 ## Key Features
 
-### Multi-Table Operations
-- Automatic table detection based on node ID prefixes
-- Primary and secondary table coordination
-- Secondary existence map management
-- Probability-based secondary node generation
+### Optimized Single-Table Operations
+- Vectorized queries fetch parent + children in one query
+- World-based filtering via `ExistenceMap`
+- Conditional traversal updates (skip already-successful nodes)
+- Bulk inserts in single transactions
 
 ### Lazy Generation
 - Children generated only when requested via `ListChildren()`
 - Deterministic generation based on configuration and seed
-- Efficient storage of generated structures
+- Efficient storage of generated structures with embedded existence information
 
 ### State Management
-- Traversal status tracking
+- Per-world traversal status tracking
 - Node metadata management
 - Path and depth level maintenance
+- Migration status tracking via `CopyStatus`
 
 ## Core Operations
 
+All operations use interface-based request structs for flexible lookup (by ID or by Path+TableName).
+
 ### Node Operations
-- `GetNode(id)` - Retrieve node from appropriate table
-- `CreateFolder(parentID, name)` - Create new folder with multi-table support
-- `UploadFile(parentID, name, data)` - Create file node with data processing
-- `DeleteNode(id)` - Delete node from appropriate table
+- `GetNode(req)` - Retrieve node by ID or Path+World using NodeIdentifier
+- `CreateFolder(req)` - Create new folder with ExistenceMap using ParentIdentifier
+- `UploadFile(req)` - Create file node with data processing using ParentIdentifier
+- `DeleteNode(req)` - Delete node by ID using NodeIdentifier
+- `UpdateTraversalStatus(req)` - Update per-world traversal status using NodeIdentifier
 
 ### Children Operations
-- `ListChildren(parentID)` - List children with lazy generation
-- `CheckChildrenExist(parentID)` - Check if children exist
+- `ListChildren(req)` - List children with lazy generation using ParentIdentifier
+- World-aware filtering based on request context (defaults to "primary")
 
 ### System Operations
-- `Reset()` - Clear all tables and recreate root
+- `Reset()` - Clear nodes table and recreate single root
 - `GetConfig()` - Get current configuration
-- `GetTableInfo()` - Get table metadata
-- `GetNodeCount(tableName)` - Count nodes in specific table
+- `GetTableInfo()` - Get world metadata
+- `GetNodeCount(world)` - Count nodes in specific world
+- `GetFileData(id)` - Generate and return file data with checksum
+- `GetSecondaryTables()` - Get list of configured secondary worlds
 
-## ListChildren Logic
+## ListChildren Logic (Optimized)
 
-The core `ListChildren` operation implements the sophisticated multi-table logic:
+The core `ListChildren` operation is dramatically simplified with the single-table architecture:
 
-1. **Table Detection**: Determine which table contains the parent node
-2. **Children Check**: Query the parent's table for existing children
-3. **Lazy Generation**: If no children exist, generate them using the generator
-4. **Multi-Table Insertion**: Insert primary nodes and probability-based secondary nodes
-5. **Existence Map Update**: Update primary parent's secondary existence map
-6. **Result Retrieval**: Return children from the appropriate table
+1. **Single Vectorized Query**: Fetch parent + children in ONE query using `GetParentAndChildren(parentID, world)`
+2. **Existence Check**: Verify parent exists in requested world
+3. **Lazy Generation**: If no children exist, generate them in-memory
+4. **Bulk Insert**: Insert all generated nodes in ONE transaction
+5. **World Filtering**: Filter children by `ExistenceMap` for requested world
+6. **Conditional Update**: Update traversal status (skips if already successful)
+7. **Result Formatting**: Separate folders and files, return result
+
+**Performance:** Reduced from 4-6 queries to 1-2 queries per operation.
 
 ## Configuration Integration
 
@@ -81,6 +90,17 @@ Comprehensive error handling for:
 - Generation errors
 - Configuration issues
 
+## Request Interface System
+
+SpectraFS operations use an interface-based request system (see `models/` subdirectory) that supports:
+
+- **ID-based lookup**: Direct node/parent identification
+- **Path-based lookup**: Lookup by path + table name
+- **Type safety**: Interface validation ensures correct usage
+- **Flexibility**: Users can pass any struct implementing the required interfaces
+
+See `internal/spectrafs/models/README.md` for detailed documentation on the request system.
+
 ## Usage
 
 SpectraFS is the core implementation used by the SDK. It provides the main filesystem operations that are exposed through the public API.
@@ -91,12 +111,50 @@ SpectraFS is the core implementation used by the SDK. It provides the main files
 // Initialize SpectraFS
 fs, err := spectrafs.NewSpectraFS(config)
 
-// List children (with lazy generation)
-result, err := fs.ListChildren("p-root")
+// List children (with lazy generation) - by ID
+result, err := fs.ListChildren(&models.ListChildrenRequest{
+    ParentID: "root",  // Plain ID, no prefixes
+})
 
-// Create folder
-folder, err := fs.CreateFolder("p-root", "new-folder")
+// List children - by path with world specification
+result, err := fs.ListChildren(&models.ListChildrenRequest{
+    ParentPath: "/",
+    TableName:  "s1",  // TableName used to specify world
+})
+
+// Create folder (will get ExistenceMap based on probabilities)
+folder, err := fs.CreateFolder(&models.CreateFolderRequest{
+    ParentID: "root",
+    Name:     "new-folder",
+})
+// folder.ExistenceMap might be: {"primary": true, "s1": true, "s2": false}
 
 // Upload file
-file, err := fs.UploadFile("p-root", "test.txt", []byte("data"))
+file, err := fs.UploadFile(&models.UploadFileRequest{
+    ParentID: "root",
+    Name:     "test.txt",
+    Data:     []byte("data"),
+})
+
+// Get node by ID (plain UUID)
+node, err := fs.GetNode(&models.GetNodeRequest{
+    ID: "abc123-...",  // Plain UUID
+})
+
+// Get node by path in specific world
+node, err := fs.GetNode(&models.GetNodeRequest{
+    Path:      "/folder/file.txt",
+    TableName: "s1",  // Retrieve from s1 world
+})
+
+// Delete node
+err = fs.DeleteNode(&models.DeleteNodeRequest{
+    ID: "abc123-...",
+})
+
+// Update traversal status for specific world
+err = fs.UpdateTraversalStatus(&models.UpdateTraversalStatusRequest{
+    ID:     "abc123-...",
+    Status: "successful",
+})
 ```

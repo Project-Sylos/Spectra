@@ -13,8 +13,8 @@ generator/
 ## Core Features
 
 - **Deterministic Generation**: Seeded random number generator for reproducible results
-- **UUID-based IDs**: Consistent unique identifiers across all tables
-- **Probability-Based Secondary Nodes**: Secondary table generation based on configurable probabilities
+- **Plain UUID IDs**: Simple unique identifiers without prefixes
+- **Inline Existence Mapping**: World existence determined during generation and stored in `ExistenceMap`
 - **File Data Generation**: 1KB random data with SHA256 checksums
 - **Depth-Aware Generation**: Respects maximum depth constraints
 
@@ -26,10 +26,9 @@ generator/
 - Used for all procedural generation decisions
 
 ### Node Generation
-- `GenerateChildren()` - Generate child nodes for a parent
-- `GenerateSecondaryNodes()` - Determine secondary table existence based on probabilities
-- `generateFolder()` - Create folder nodes with UUID-based IDs
-- `generateFile()` - Create file nodes with UUID-based IDs
+- `GenerateChildren()` - Generate child nodes with `ExistenceMap` populated
+- `generateFolder()` - Create folder nodes with plain UUID IDs
+- `generateFile()` - Create file nodes with plain UUID IDs
 
 ### File Data Generation
 - `GenerateFileData()` - Generate 1KB random data with checksum
@@ -38,17 +37,15 @@ generator/
 
 ## Generation Logic
 
-### Primary Node Generation
+### Unified Node Generation
 1. Generate children based on configuration (min/max folders, files)
-2. Create UUID-based IDs with `p-` prefix
-3. Set appropriate depth levels and paths
-4. Generate random names and timestamps
+2. Create plain UUID IDs for each node
+3. For each node, roll dice against world probabilities
+4. Populate `ExistenceMap` based on probability rolls: `{"primary": true, "s1": true, "s2": false}`
+5. Set appropriate depth levels, paths, and timestamps
+6. Return single flat list of nodes
 
-### Secondary Node Generation
-1. For each primary node, roll dice against secondary table probabilities
-2. If probability check passes, create secondary node with same UUID but different prefix
-3. Secondary nodes reference primary parent ID
-4. Update primary node's existence map
+**Key Improvement:** All nodes generated in a single pass with existence information embedded, eliminating the need for separate primary/secondary generation steps.
 
 ### File Data Generation
 - Generate 1KB of random data
@@ -71,11 +68,15 @@ The generator is used internally by the SpectraFS implementation to create the s
 ## Example
 
 ```go
-// Generate children for a parent node
-children, err := generator.GenerateChildren(parentNode, config, rng)
+// Generate children for a parent node (returns single list with ExistenceMap)
+children, err := generator.GenerateChildren(parentNode, depth, rng, config)
+// Returns: []*types.Node with ExistenceMap populated per node
 
-// Generate secondary nodes based on probabilities
-secondaryNodes, err := generator.GenerateSecondaryNodes(primaryNode, config, rng)
+// Each child has existence information embedded
+for _, child := range children {
+    // child.ExistenceMap contains: {"primary": true, "s1": true, "s2": false}
+    fmt.Printf("Node %s exists in worlds: %v\n", child.ID, child.ExistenceMap)
+}
 
 // Generate file data with checksum
 data, checksum, err := generator.GenerateFileData(rng)

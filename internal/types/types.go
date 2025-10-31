@@ -29,19 +29,20 @@ type APIConfig struct {
 }
 
 // Node represents a filesystem node (file or folder) in the DuckDB table
-// Enhanced with UUID-based IDs and secondary existence mapping
+// Unified single-table design with existence tracking across worlds
 type Node struct {
-	ID                    string          `json:"id" db:"id"`                                           // UUID-based: p-{uuid}, s1-{uuid}, etc.
-	ParentID              string          `json:"parent_id" db:"parent_id"`                             // UUID-based parent reference
-	Name                  string          `json:"name" db:"name"`                                       // Display name
-	Path                  string          `json:"path" db:"path"`                                       // Relative path
-	Type                  string          `json:"type" db:"type"`                                       // "folder" or "file"
-	DepthLevel            int             `json:"depth_level" db:"depth_level"`                         // BFS-style depth index
-	Size                  int64           `json:"size" db:"size"`                                       // File size (0 for folders)
-	LastUpdated           time.Time       `json:"last_updated" db:"last_updated"`                       // Synthetic timestamp
-	TraversalStatus       string          `json:"traversal_status" db:"traversal_status"`               // "pending", "successful", "failed"
-	Checksum              *string         `json:"checksum" db:"checksum"`                               // SHA256 checksum (NULL for folders)
-	SecondaryExistenceMap map[string]bool `json:"secondary_existence_map" db:"secondary_existence_map"` // JSON: {"s1": true, "s2": false}
+	ID                string            `json:"id" db:"id"`                          // UUID identifier
+	ParentID          string            `json:"parent_id" db:"parent_id"`            // UUID parent reference
+	Name              string            `json:"name" db:"name"`                      // Display name
+	Path              string            `json:"path" db:"path"`                      // Relative path
+	Type              string            `json:"type" db:"type"`                      // "folder" or "file"
+	DepthLevel        int               `json:"depth_level" db:"depth_level"`        // BFS-style depth index
+	Size              int64             `json:"size" db:"size"`                      // File size (0 for folders)
+	LastUpdated       time.Time         `json:"last_updated" db:"last_updated"`      // Synthetic timestamp
+	Checksum          *string           `json:"checksum" db:"checksum"`              // SHA256 checksum (NULL for folders)
+	ExistenceMap      map[string]bool   `json:"existence_map" db:"existence_map"`    // JSON: {"primary": true, "s1": true, "s2": false}
+	TraversalStatuses map[string]string `json:"traversal_statuses,omitempty" db:"-"` // In-memory per-world traversal states
+	CopyStatus        string            `json:"copy_status" db:"copy_status"`        // "pending", "in_progress", "completed"
 }
 
 // Folder represents a folder node
@@ -90,62 +91,14 @@ const (
 	StatusFailed     = "failed"
 )
 
-// Table prefix constants
+// CopyStatus constants
 const (
-	PrimaryPrefix   = "p-"
-	SecondaryPrefix = "s"
+	CopyStatusPending    = "pending"
+	CopyStatusInProgress = "in_progress"
+	CopyStatusCompleted  = "completed"
 )
 
-// Helper functions for ID management
-func IsPrimaryID(id string) bool {
-	return len(id) > 2 && id[:2] == PrimaryPrefix
-}
-
-func IsSecondaryID(id string) bool {
-	if len(id) < 4 || id[:1] != SecondaryPrefix {
-		return false
-	}
-
-	// Find the dash position
-	for i, char := range id {
-		if char == '-' {
-			// Check that everything before the dash is "s" followed by digits
-			prefix := id[1:i]
-			if len(prefix) == 0 {
-				return false
-			}
-			for _, c := range prefix {
-				if c < '0' || c > '9' {
-					return false
-				}
-			}
-			return true
-		}
-	}
-	return false
-}
-
-func GetTableFromID(id string) string {
-	if IsPrimaryID(id) {
-		return "nodes_primary"
-	}
-	if IsSecondaryID(id) {
-		// Extract table name like "s1" from "s1-uuid"
-		for i, char := range id {
-			if char == '-' {
-				return "nodes_" + id[:i]
-			}
-		}
-	}
-	return ""
-}
-
-func GetUUIDFromID(id string) string {
-	// Extract UUID portion from "p-uuid" or "s1-uuid"
-	for i, char := range id {
-		if char == '-' {
-			return id[i+1:]
-		}
-	}
-	return id
+// GetTableName returns the full table name (always "nodes" now)
+func GetTableName(world string) string {
+	return "nodes"
 }

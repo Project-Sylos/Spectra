@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Project-Sylos/Spectra/internal/api/models"
+	apimodels "github.com/Project-Sylos/Spectra/internal/api/models"
+	spectrafsmodels "github.com/Project-Sylos/Spectra/internal/spectrafs/models"
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/Project-Sylos/Spectra/sdk"
 	"github.com/go-chi/chi/v5"
@@ -26,18 +27,33 @@ func NewFileHandler(fs *sdk.SpectraFS) *FileHandler {
 
 // UploadFile handles the upload file endpoint
 func (h *FileHandler) UploadFile(w http.ResponseWriter, req *http.Request) {
-	var request models.UploadFileRequest
-	if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+	var apiRequest apimodels.UploadFileRequest
+	if err := json.NewDecoder(req.Body).Decode(&apiRequest); err != nil {
 		h.sendError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	if request.ParentID == "" || request.Name == "" {
-		h.sendError(w, http.StatusBadRequest, "parent_id and name are required")
+	// Validate that either parent_id or (parent_path + table_name) is provided
+	if apiRequest.ParentID == "" && (apiRequest.ParentPath == "" || apiRequest.TableName == "") {
+		h.sendError(w, http.StatusBadRequest, "either parent_id or (parent_path + table_name) are required")
 		return
 	}
 
-	file, err := h.fs.UploadFile(request.ParentID, request.Name, request.Data)
+	if apiRequest.Name == "" {
+		h.sendError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Convert API model to spectrafs request model
+	spectrafsRequest := &spectrafsmodels.UploadFileRequest{
+		ParentID:   apiRequest.ParentID,
+		ParentPath: apiRequest.ParentPath,
+		TableName:  apiRequest.TableName,
+		Name:       apiRequest.Name,
+		Data:       apiRequest.Data,
+	}
+
+	file, err := h.fs.UploadFile(spectrafsRequest)
 	if err != nil {
 		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to upload file: %v", err))
 		return

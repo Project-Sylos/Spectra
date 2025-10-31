@@ -23,7 +23,7 @@ func NewRNG(seed int64) *RNG {
 }
 
 // GenerateChildren generates children nodes for a given parent based on configuration
-// Enhanced with UUID-based IDs and secondary table probability logic
+// Returns a single list of nodes with ExistenceMap populated for each
 func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config) ([]*types.Node, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration cannot be nil")
@@ -39,7 +39,7 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	// Generate folders
 	folderCount := rng.Intn(cfg.Seed.MaxFolders-cfg.Seed.MinFolders+1) + cfg.Seed.MinFolders
 	for i := 0; i < folderCount; i++ {
-		folder, err := generateFolder(parent, i+1, depth+1)
+		folder, err := generateFolder(parent, i+1, depth+1, cfg, rng)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate folder %d: %w", i+1, err)
 		}
@@ -49,7 +49,7 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	// Generate files
 	fileCount := rng.Intn(cfg.Seed.MaxFiles-cfg.Seed.MinFiles+1) + cfg.Seed.MinFiles
 	for i := 0; i < fileCount; i++ {
-		file, err := generateFile(parent, i+1, depth+1, rng)
+		file, err := generateFile(parent, i+1, depth+1, cfg, rng)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate file %d: %w", i+1, err)
 		}
@@ -59,38 +59,48 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	return children, nil
 }
 
-// generateFolder creates a new folder node with UUID-based ID
-func generateFolder(parent *types.Node, index int, depth int) (*types.Node, error) {
+// generateFolder creates a new folder node with UUID and ExistenceMap
+func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("folder_%d", index)
 	path := filepath.Join(parent.Path, name)
 
 	// Generate UUID for the node
-	nodeUUID := uuid.New().String()
-	primaryID := types.PrimaryPrefix + nodeUUID
+	nodeID := uuid.New().String()
+
+	// Create existence map - start with primary
+	existenceMap := make(map[string]bool)
+	existenceMap["primary"] = true
+
+	// Roll dice for each secondary world
+	for worldName, probability := range cfg.SecondaryTables {
+		roll := rng.Float64()
+		if roll <= probability {
+			existenceMap[worldName] = true
+		}
+	}
 
 	return &types.Node{
-		ID:                    primaryID,
-		ParentID:              parent.ID,
-		Name:                  name,
-		Path:                  path,
-		Type:                  types.NodeTypeFolder,
-		DepthLevel:            depth,
-		Size:                  0, // Folders have size 0
-		LastUpdated:           time.Now(),
-		TraversalStatus:       types.StatusPending,
-		Checksum:              nil, // Folders don't have checksums
-		SecondaryExistenceMap: make(map[string]bool),
+		ID:           nodeID,
+		ParentID:     parent.ID,
+		Name:         name,
+		Path:         path,
+		Type:         types.NodeTypeFolder,
+		DepthLevel:   depth,
+		Size:         0, // Folders have size 0
+		LastUpdated:  time.Now(),
+		Checksum:     nil, // Folders don't have checksums
+		ExistenceMap: existenceMap,
+		CopyStatus:   types.CopyStatusPending,
 	}, nil
 }
 
-// generateFile creates a new file node with UUID-based ID
-func generateFile(parent *types.Node, index int, depth int, rng *RNG) (*types.Node, error) {
+// generateFile creates a new file node with UUID and ExistenceMap
+func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("file_%d.txt", index)
 	path := filepath.Join(parent.Path, name)
 
 	// Generate UUID for the node
-	nodeUUID := uuid.New().String()
-	primaryID := types.PrimaryPrefix + nodeUUID
+	nodeID := uuid.New().String()
 
 	// Generate file data and checksum
 	_, checksum, err := GenerateFileData(rng)
@@ -98,18 +108,30 @@ func generateFile(parent *types.Node, index int, depth int, rng *RNG) (*types.No
 		return nil, fmt.Errorf("failed to generate file data: %w", err)
 	}
 
+	// Create existence map - start with primary
+	existenceMap := make(map[string]bool)
+	existenceMap["primary"] = true
+
+	// Roll dice for each secondary world
+	for worldName, probability := range cfg.SecondaryTables {
+		roll := rng.Float64()
+		if roll <= probability {
+			existenceMap[worldName] = true
+		}
+	}
+
 	return &types.Node{
-		ID:                    primaryID,
-		ParentID:              parent.ID,
-		Name:                  name,
-		Path:                  path,
-		Type:                  types.NodeTypeFile,
-		DepthLevel:            depth,
-		Size:                  1024, // 1KB files as specified
-		LastUpdated:           time.Now(),
-		TraversalStatus:       types.StatusPending,
-		Checksum:              &checksum, // Store the computed checksum
-		SecondaryExistenceMap: make(map[string]bool),
+		ID:           nodeID,
+		ParentID:     parent.ID,
+		Name:         name,
+		Path:         path,
+		Type:         types.NodeTypeFile,
+		DepthLevel:   depth,
+		Size:         1024, // 1KB files as specified
+		LastUpdated:  time.Now(),
+		Checksum:     &checksum, // Store the computed checksum
+		ExistenceMap: existenceMap,
+		CopyStatus:   types.CopyStatusPending,
 	}, nil
 }
 
@@ -138,37 +160,4 @@ func ValidateConfig(cfg *types.Config) error {
 	return nil
 }
 
-// GenerateSecondaryNodes creates secondary table nodes based on probability
-func GenerateSecondaryNodes(primaryNode *types.Node, cfg *types.Config, rng *RNG) (map[string]*types.Node, error) {
-	secondaryNodes := make(map[string]*types.Node)
-
-	// Extract UUID from primary node ID
-	uuid := types.GetUUIDFromID(primaryNode.ID)
-
-	// Check probability for each secondary table
-	for tableName, probability := range cfg.SecondaryTables {
-		// Roll the dice: if random float <= probability, create secondary node
-		roll := rng.Float64()
-		if roll <= probability {
-			// Create secondary node with same UUID but different prefix
-			secondaryID := tableName + "-" + uuid
-
-			secondaryNode := &types.Node{
-				ID:                    secondaryID,
-				ParentID:              primaryNode.ParentID, // Reference to primary parent
-				Name:                  primaryNode.Name,
-				Path:                  primaryNode.Path,
-				Type:                  primaryNode.Type,
-				DepthLevel:            primaryNode.DepthLevel,
-				Size:                  primaryNode.Size,
-				LastUpdated:           primaryNode.LastUpdated,
-				TraversalStatus:       primaryNode.TraversalStatus,
-				SecondaryExistenceMap: make(map[string]bool), // Secondary nodes don't have existence maps
-			}
-
-			secondaryNodes[tableName] = secondaryNode
-		}
-	}
-
-	return secondaryNodes, nil
-}
+// Note: GenerateSecondaryNodes removed - existence is now determined inline during node generation

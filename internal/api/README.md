@@ -28,6 +28,7 @@ api/
 - **Middleware Support**: Extensible middleware system for cross-cutting concerns
 - **Type Safety**: Strongly typed request/response models
 - **Error Handling**: Consistent error responses with proper HTTP status codes
+- **Request Model Conversion**: API models are converted to spectrafs request models for processing
 
 ## Handlers
 
@@ -49,13 +50,35 @@ Provides common functionality for all handlers:
 - **CORS**: Cross-origin resource sharing support
 - **Chi Middleware**: Logger, recoverer, request ID, real IP, timeout
 
+## Request Models
+
+The API uses its own request models in `models/requests.go` that mirror the structure of spectrafs request models. These are converted internally to spectrafs models for processing:
+
+```go
+// API request model (JSON from HTTP)
+type ListChildrenRequest struct {
+    ParentID   string `json:"parent_id,omitempty"`
+    ParentPath string `json:"parent_path,omitempty"`
+    TableName  string `json:"table_name,omitempty"`
+}
+
+// Converted to spectrafs request model
+spectrafsRequest := &spectrafsmodels.ListChildrenRequest{
+    ParentID:   apiRequest.ParentID,
+    ParentPath: apiRequest.ParentPath,
+    TableName:  apiRequest.TableName,
+}
+```
+
+This separation allows the API layer to evolve independently from the core business logic.
+
 ## Routes
 
 All API routes are prefixed with `/api/v1/` and organized by domain:
 
-- `/api/v1/folder/*` - Folder operations
-- `/api/v1/file/*` - File operations
-- `/api/v1/node/*` - Node operations
+- `/api/v1/folder/*` - Folder operations (list, create)
+- `/api/v1/file/*` - File operations (upload, get metadata, get data)
+- `/api/v1/node/*` - Node operations (get, delete)
 - `/api/v1/reset` - System reset
 - `/api/v1/config` - Configuration retrieval
 - `/api/v1/tables/*` - Table information

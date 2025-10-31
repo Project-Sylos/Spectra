@@ -30,13 +30,13 @@ type SpectraFS struct {
 ### Core Operations
 
 #### Node Operations
-- `GetNode(id)` - Retrieve node by ID
-- `CreateFolder(parentID, name)` - Create new folder
-- `UploadFile(parentID, name, data)` - Upload file with data processing
-- `DeleteNode(id)` - Delete node by ID
+- `GetNode(req *GetNodeRequest)` - Retrieve node by ID or Path+TableName
+- `CreateFolder(req *CreateFolderRequest)` - Create new folder
+- `UploadFile(req *UploadFileRequest)` - Upload file with data processing
+- `DeleteNode(req *DeleteNodeRequest)` - Delete node by ID or Path+TableName
 
 #### Children Operations
-- `ListChildren(parentID)` - List children with lazy generation
+- `ListChildren(req *ListChildrenRequest)` - List children with lazy generation (supports ID or Path+TableName lookup)
 - `CheckChildrenExist(parentID)` - Check if children exist
 
 #### System Operations
@@ -49,7 +49,7 @@ type SpectraFS struct {
 - `GetFileData(id)` - Get file data and checksum
 
 #### Status Operations
-- `UpdateTraversalStatus(id, status)` - Update node traversal status
+- `UpdateTraversalStatus(req *UpdateTraversalStatusRequest)` - Update node traversal status (supports ID or Path+TableName lookup)
 
 ## Type Re-exports
 
@@ -63,7 +63,32 @@ type (
     APIResponse = types.APIResponse
     TableInfo   = types.TableInfo
 )
+
+// Request types
+type (
+    GetNodeRequest              = models.GetNodeRequest
+    ListChildrenRequest         = models.ListChildrenRequest
+    CreateFolderRequest         = models.CreateFolderRequest
+    UploadFileRequest           = models.UploadFileRequest
+    DeleteNodeRequest           = models.DeleteNodeRequest
+    UpdateTraversalStatusRequest = models.UpdateTraversalStatusRequest
+)
 ```
+
+## Request Types
+
+All request types support flexible lookup methods through a clean interface-based design:
+
+- **ID-based lookup**: Provide the `ID` field (or `ParentID` for parent operations)
+- **Path-based lookup**: Provide `Path` (or `ParentPath`) + `TableName` together
+
+**Validation Rules:**
+- For operations requiring a parent: Either `ParentID` OR (`ParentPath` + `TableName`) must be provided
+- For node operations: Either `ID` OR (`Path` + `TableName`) must be provided
+- When using path-based lookup, `TableName` is required and must be one of: `"primary"`, `"s1"`, `"s2"`, etc.
+
+**Design Philosophy:**
+The request structs use a simple struct literal syntax - no embedding or complex initialization required. Each request struct implements the appropriate interfaces (`NodeIdentifier`, `ParentIdentifier`, `NamedRequest`, etc.) for type safety and validation.
 
 ## Usage
 
@@ -83,30 +108,93 @@ if err != nil {
 ```
 
 ### Basic Operations
+
+#### ID-Based Operations
 ```go
-// List children (with lazy generation)
-result, err := fs.ListChildren("p-root")
+// List children by parent ID (with lazy generation)
+result, err := fs.ListChildren(&sdk.ListChildrenRequest{
+    ParentID: "root",
+})
 if err != nil {
     log.Fatal(err)
 }
 
 // Create folder
-folder, err := fs.CreateFolder("p-root", "new-folder")
+folder, err := fs.CreateFolder(&sdk.CreateFolderRequest{
+    ParentID: "root",
+    Name:     "new-folder",
+})
 if err != nil {
     log.Fatal(err)
 }
 
 // Upload file
-file, err := fs.UploadFile("p-root", "test.txt", []byte("data"))
+file, err := fs.UploadFile(&sdk.UploadFileRequest{
+    ParentID: "root",
+    Name:     "test.txt",
+    Data:     []byte("data"),
+})
 if err != nil {
     log.Fatal(err)
 }
 
-// Get node
-node, err := fs.GetNode("p-root")
+// Get node by ID
+node, err := fs.GetNode(&sdk.GetNodeRequest{
+    ID: "root",
+})
 if err != nil {
     log.Fatal(err)
 }
+
+// Delete node
+err = fs.DeleteNode(&sdk.DeleteNodeRequest{
+    ID: folder.ID,
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// Update traversal status
+err = fs.UpdateTraversalStatus(&sdk.UpdateTraversalStatusRequest{
+    ID:     node.ID,
+    Status: sdk.StatusSuccessful,
+})
+```
+
+#### Path-Based Operations
+```go
+// List children by path and table name
+result, err := fs.ListChildren(&sdk.ListChildrenRequest{
+    ParentPath: "/",
+    TableName:  "primary",
+})
+
+// Get node by path
+node, err := fs.GetNode(&sdk.GetNodeRequest{
+    Path:      "/folder1",
+    TableName: "s1",
+})
+
+// Create folder using path lookup
+folder, err := fs.CreateFolder(&sdk.CreateFolderRequest{
+    ParentPath: "/",
+    TableName:  "primary",
+    Name:       "new-folder",
+})
+
+// Upload file using path lookup
+file, err := fs.UploadFile(&sdk.UploadFileRequest{
+    ParentPath: "/folder1",
+    TableName:  "primary",
+    Name:       "data.txt",
+    Data:       []byte("content"),
+})
+
+// Delete node by path
+err = fs.DeleteNode(&sdk.DeleteNodeRequest{
+    Path:      "/folder1/subfolder",
+    TableName: "primary",
+})
 ```
 
 ### System Operations
