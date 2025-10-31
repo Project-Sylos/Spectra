@@ -9,8 +9,7 @@ api/
 ├── handlers/          # Endpoint handlers organized by domain
 │   ├── base.go       # Common handler functionality
 │   ├── health.go     # Health check endpoints
-│   ├── folder.go     # Folder operations
-│   ├── file.go       # File operations
+│   ├── item.go       # Item operations (files and folders)
 │   ├── node.go       # Node operations
 │   └── system.go     # System operations
 ├── middleware/        # HTTP middleware
@@ -23,7 +22,7 @@ api/
 
 ## Design Principles
 
-- **Modular Handlers**: Each handler focuses on a specific domain (folder, file, node, system)
+- **Modular Handlers**: Each handler focuses on a specific domain (items, node, system)
 - **Base Handler**: Common functionality shared across all handlers
 - **Middleware Support**: Extensible middleware system for cross-cutting concerns
 - **Type Safety**: Strongly typed request/response models
@@ -40,8 +39,7 @@ Provides common functionality for all handlers:
 
 ### Domain Handlers
 - **HealthHandler**: Health check endpoints
-- **FolderHandler**: Folder CRUD operations
-- **FileHandler**: File upload and data retrieval
+- **ItemHandler**: Item operations (list, create folder, upload file, get file data)
 - **NodeHandler**: Generic node operations (get, delete)
 - **SystemHandler**: System operations (reset, config, tables)
 
@@ -76,8 +74,7 @@ This separation allows the API layer to evolve independently from the core busin
 
 All API routes are prefixed with `/api/v1/` and organized by domain:
 
-- `/api/v1/folder/*` - Folder operations (list, create)
-- `/api/v1/file/*` - File operations (upload, get metadata, get data)
+- `/api/v1/items/*` - Item operations (list, create folder, upload file, get metadata, get file data)
 - `/api/v1/node/*` - Node operations (get, delete)
 - `/api/v1/reset` - System reset
 - `/api/v1/config` - Configuration retrieval

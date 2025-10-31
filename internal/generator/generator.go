@@ -90,7 +90,6 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 		LastUpdated:  time.Now(),
 		Checksum:     nil, // Folders don't have checksums
 		ExistenceMap: existenceMap,
-		CopyStatus:   types.CopyStatusPending,
 	}, nil
 }
 
@@ -131,7 +130,6 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 		LastUpdated:  time.Now(),
 		Checksum:     &checksum, // Store the computed checksum
 		ExistenceMap: existenceMap,
-		CopyStatus:   types.CopyStatusPending,
 	}, nil
 }
 

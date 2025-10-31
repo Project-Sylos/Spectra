@@ -103,21 +103,18 @@ Spectra/
 
 Spectra represents all nodes as entries in a unified DuckDB table:
 
-| Column               | Type      | Description                                              |
-| -------------------- | --------- | -------------------------------------------------------- |
-| `id`                 | string    | Plain UUID identifier                                    |
-| `parent_id`          | string    | UUID of parent folder                                    |
-| `name`               | string    | Display name                                             |
-| `path`               | string    | Relative path (root-relative, not absolute)              |
-| `type`               | string    | `"folder"` or `"file"`                                   |
-| `depth_level`        | int       | BFS-style depth index                                    |
-| `size`               | int64     | File size (0 for folders)                                |
-| `last_updated`       | timestamp | Synthetic timestamp                                      |
-| `checksum`           | string    | SHA256 checksum (for files only)                         |
+| Column               | Type      | Description                                                |
+| -------------------- | --------- | --------------------------------------------------------   |
+| `id`                 | string    | Plain UUID identifier                                      |
+| `parent_id`          | string    | UUID of parent folder                                      |
+| `name`               | string    | Display name                                               |
+| `path`               | string    | Relative path (root-relative, not absolute)                |
+| `type`               | string    | `"folder"` or `"file"`                                     |
+| `depth_level`        | int       | BFS-style depth index                                      |
+| `size`               | int64     | File size (0 for folders)                                  |
+| `last_updated`       | timestamp | Synthetic timestamp                                        |
+| `checksum`           | string    | SHA256 checksum (for files only)                           |
 | `existence_map`      | JSON      | Map tracking world existence: `{"primary":true,"s1":true}` |
-| `traversal_primary`  | string    | Primary world traversal status                           |
-| `traversal_s1`, etc. | string    | Per-world traversal status (dynamic columns)             |
-| `copy_status`        | string    | Migration status: `"pending"`, `"in_progress"`, `"completed"` |
 
 ### Example Behavior
 
@@ -250,15 +247,6 @@ req := &sdk.DeleteNodeRequest{
     ID: "abc123-...",  // Plain UUID
 }
 err := fs.DeleteNode(req)
-```
-
-**UpdateTraversalStatusRequest** - Update node traversal status for a world
-```go
-req := &sdk.UpdateTraversalStatusRequest{
-    ID:     "abc123-...",  // Plain UUID
-    Status: "successful",  // "pending", "successful", or "failed"
-}
-err := fs.UpdateTraversalStatus(req)
 ```
 
 **Design Note:** Each request struct implements the appropriate interfaces (`NodeIdentifier`, `ParentIdentifier`, etc.) for compile-time type safety and runtime validation. Users can pass any struct that implements these interfaces.

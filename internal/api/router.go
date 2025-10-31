@@ -34,8 +34,7 @@ func (r *Router) SetupRoutes() *chi.Mux {
 
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler()
-	folderHandler := handlers.NewFolderHandler(r.fs)
-	fileHandler := handlers.NewFileHandler(r.fs)
+	itemHandler := handlers.NewItemHandler(r.fs)
 	nodeHandler := handlers.NewNodeHandler(r.fs)
 	systemHandler := handlers.NewSystemHandler(r.fs)
 
@@ -44,18 +43,13 @@ func (r *Router) SetupRoutes() *chi.Mux {
 
 	// API routes
 	router.Route("/api/v1", func(api chi.Router) {
-		// Folder operations
-		api.Route("/folder", func(folder chi.Router) {
-			folder.Post("/list", folderHandler.ListChildren)
-			folder.Post("/create", folderHandler.CreateFolder)
-			folder.Get("/{id}", nodeHandler.GetNode) // Reuse node handler for getting folder info
-		})
-
-		// File operations
-		api.Route("/file", func(file chi.Router) {
-			file.Post("/upload", fileHandler.UploadFile)
-			file.Get("/{id}", nodeHandler.GetNode) // Reuse node handler for getting file info
-			file.Get("/{id}/data", fileHandler.GetFileData)
+		// Item operations (files and folders)
+		api.Route("/items", func(items chi.Router) {
+			items.Post("/list", itemHandler.ListItems)
+			items.Post("/folder", itemHandler.CreateFolder)
+			items.Post("/file", itemHandler.UploadFile)
+			items.Get("/{id}", nodeHandler.GetNode) // Reuse node handler for getting item info
+			items.Get("/{id}/data", itemHandler.GetFileData)
 		})
 
 		// Node operations

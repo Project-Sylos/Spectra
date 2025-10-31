@@ -41,8 +41,6 @@ type Node struct {
 	LastUpdated       time.Time         `json:"last_updated" db:"last_updated"`      // Synthetic timestamp
 	Checksum          *string           `json:"checksum" db:"checksum"`              // SHA256 checksum (NULL for folders)
 	ExistenceMap      map[string]bool   `json:"existence_map" db:"existence_map"`    // JSON: {"primary": true, "s1": true, "s2": false}
-	TraversalStatuses map[string]string `json:"traversal_statuses,omitempty" db:"-"` // In-memory per-world traversal states
-	CopyStatus        string            `json:"copy_status" db:"copy_status"`        // "pending", "in_progress", "completed"
 }
 
 // Folder represents a folder node

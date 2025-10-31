@@ -26,16 +26,12 @@ type Node struct {
     LastUpdated       time.Time         `json:"last_updated" db:"last_updated"`
     Checksum          *string           `json:"checksum" db:"checksum"`
     ExistenceMap      map[string]bool   `json:"existence_map" db:"existence_map"`
-    TraversalStatuses map[string]string `json:"traversal_statuses,omitempty" db:"-"`
-    CopyStatus        string            `json:"copy_status" db:"copy_status"`
 }
 ```
 
 **Key Changes:**
 - `ID` is now a plain UUID (no prefixes like `p-` or `s1-`)
 - `ExistenceMap` tracks which worlds the node exists in (e.g., `{"primary": true, "s1": true}`)
-- `TraversalStatuses` is an in-memory map for per-world traversal states
-- `CopyStatus` tracks migration status ("pending", "in_progress", "completed")
 
 ### Configuration
 Multi-section configuration structure:

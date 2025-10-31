@@ -17,7 +17,6 @@ import (
 type DB struct {
 	conn             *sql.DB
 	secondaryTables  []string          // List of secondary world names (e.g., ["s1", "s2"])
-	traversalColumns map[string]string // Maps world name to traversal column name
 	mu               sync.Mutex        // Protects all database operations from concurrent access
 }
 
@@ -36,8 +35,6 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 	secondaryList := make([]string, 0, len(secondaryTables))
 	traversalCols := make(map[string]string)
 
-	// Primary world always exists
-	traversalCols["primary"] = "traversal_primary"
 
 	// Add secondary worlds
 	for tableName := range secondaryTables {
@@ -48,7 +45,6 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 	db := &DB{
 		conn:             conn,
 		secondaryTables:  secondaryList,
-		traversalColumns: traversalCols,
 	}
 
 	// Initialize schema
@@ -81,12 +77,6 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 
 	// Update secondary tables list and traversal columns map
 	db.secondaryTables = make([]string, 0, len(secondaryTables))
-	db.traversalColumns = make(map[string]string)
-	db.traversalColumns["primary"] = "traversal_primary"
-	for tableName := range secondaryTables {
-		db.secondaryTables = append(db.secondaryTables, tableName)
-		db.traversalColumns[tableName] = "traversal_" + tableName
-	}
 
 	// Build and create unified nodes table with all traversal columns
 	createTableSQL := BuildNodesTableSQL(secondaryTables)
@@ -98,16 +88,6 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 	createIndexesSQL := BuildIndexesSQL(secondaryTables)
 	if _, err := db.conn.Exec(createIndexesSQL); err != nil {
 		return fmt.Errorf("failed to create indexes: %w", err)
-	}
-
-	// Create root node - need to do this inline to avoid nested locking
-	// Check if root exists - inline query to avoid nested locking
-	var exists bool
-	query := "SELECT EXISTS(SELECT 1 FROM nodes WHERE id = 'root')"
-	err := db.conn.QueryRow(query).Scan(&exists)
-	if err == nil && exists {
-		// Root already exists
-		return nil
 	}
 
 	// Create existence map with all worlds
@@ -124,8 +104,8 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 	}
 
 	// Build insert query with all traversal columns
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map", "copy_status"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 	values := []interface{}{
 		"root",
 		"",
@@ -138,13 +118,6 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 		nil,
 		string(existenceMapJSON),
 		types.CopyStatusPending,
-	}
-
-	// Add traversal columns
-	for _, colName := range db.traversalColumns {
-		columns = append(columns, colName)
-		placeholders = append(placeholders, "?")
-		values = append(values, types.StatusPending)
 	}
 
 	insertQuery := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
@@ -176,8 +149,8 @@ func (db *DB) InsertNode(node *types.Node) error {
 	}
 
 	// Build dynamic column list and values based on traversal columns
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map", "copy_status"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 	values := []interface{}{
 		node.ID,
 		node.ParentID,
@@ -189,15 +162,6 @@ func (db *DB) InsertNode(node *types.Node) error {
 		node.LastUpdated,
 		node.Checksum,
 		string(existenceMapJSON),
-		node.CopyStatus,
-	}
-
-	// Add traversal columns
-	for world, colName := range db.traversalColumns {
-		columns = append(columns, colName)
-		placeholders = append(placeholders, "?")
-		values = append(values, types.StatusPending) // Default to pending
-		_ = world                                    // unused for now
 	}
 
 	query := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
@@ -218,12 +182,7 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 	defer db.mu.Unlock()
 
 	// Build dynamic column list for traversal statuses
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map", "copy_status"}
-
-	// Add traversal columns dynamically
-	for _, colName := range db.traversalColumns {
-		columns = append(columns, colName)
-	}
+	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
 
 	query := fmt.Sprintf("SELECT %s FROM nodes WHERE id = ?", strings.Join(columns, ", "))
 	row := db.conn.QueryRow(query, id)
@@ -244,15 +203,6 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 		&node.LastUpdated,
 		&checksumNull,
 		&existenceMapJSON,
-		&node.CopyStatus,
-	}
-
-	// Add traversal status scan targets
-	traversalStatuses := make(map[string]string)
-	for world := range db.traversalColumns {
-		var status string
-		scanTargets = append(scanTargets, &status)
-		traversalStatuses[world] = "" // Will be populated after scan
 	}
 
 	err := row.Scan(scanTargets...)
@@ -277,10 +227,6 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 		node.ExistenceMap = make(map[string]bool)
 	}
 
-	// Populate traversal statuses from the scanned values
-	// Note: This is a simplified version - in practice we'd need to properly extract the values
-	node.TraversalStatuses = make(map[string]string)
-
 	return node, nil
 }
 
@@ -290,7 +236,7 @@ func (db *DB) GetChildrenByParentID(parentID, world string) ([]*types.Node, erro
 	defer db.mu.Unlock()
 
 	query := `
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map, copy_status
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE parent_id = ?
   AND json_extract_string(existence_map, '` + world + `') = 'true'
@@ -319,7 +265,6 @@ ORDER BY type, name`
 			&node.LastUpdated,
 			&checksumNull,
 			&existenceMapJSON,
-			&node.CopyStatus,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan child node: %w", err)
@@ -356,7 +301,7 @@ func (db *DB) GetParentAndChildren(parentID, world string) ([]*types.Node, error
 	defer db.mu.Unlock()
 
 	query := `
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map, copy_status
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE (id = ? OR parent_id = ?)
   AND json_extract_string(existence_map, '` + world + `') = 'true'
@@ -387,7 +332,6 @@ ORDER BY
 			&node.LastUpdated,
 			&checksumNull,
 			&existenceMapJSON,
-			&node.CopyStatus,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan node: %w", err)
@@ -435,37 +379,6 @@ WHERE parent_id = ?
 		return false, fmt.Errorf("failed to check children existence for %s: %w", parentID, err)
 	}
 	return count > 0, nil
-}
-
-// UpdateTraversalStatus updates the traversal status of a node for a specific world
-func (db *DB) UpdateTraversalStatus(id, world, status string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	colName, ok := db.traversalColumns[world]
-	if !ok {
-		return fmt.Errorf("unknown world: %s", world)
-	}
-
-	// Simple direct update without transaction (mutex provides serialization)
-	query := "UPDATE nodes SET " + colName + " = ? WHERE id = ?"
-
-	result, err := db.conn.Exec(query, status, id)
-	if err != nil {
-		return fmt.Errorf("failed to update traversal status for %s in world %s: %w", id, world, err)
-	}
-
-	// Check if any rows were affected
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("node %s not found", id)
-	}
-
-	return nil
 }
 
 // UpdateExistenceMap updates the existence map for a node
@@ -588,7 +501,6 @@ func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error
 		LastUpdated:  time.Now(),
 		Checksum:     nil, // Folders don't have checksums
 		ExistenceMap: make(map[string]bool),
-		CopyStatus:   types.CopyStatusPending,
 	}
 
 	return folderNode, nil
@@ -623,8 +535,8 @@ func (db *DB) CreateRootNode() error {
 	}
 
 	// Build insert query with all traversal columns
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map", "copy_status"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 	values := []interface{}{
 		"root",
 		"",
@@ -636,14 +548,6 @@ func (db *DB) CreateRootNode() error {
 		time.Now(),
 		nil,
 		string(existenceMapJSON),
-		types.CopyStatusPending,
-	}
-
-	// Add traversal columns
-	for _, colName := range db.traversalColumns {
-		columns = append(columns, colName)
-		placeholders = append(placeholders, "?")
-		values = append(values, types.StatusPending)
 	}
 
 	insertQuery := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
@@ -704,14 +608,8 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 	defer tx.Rollback()
 
 	// Build dynamic column list
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map", "copy_status"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
-
-	// Add traversal columns
-	for _, colName := range db.traversalColumns {
-		columns = append(columns, colName)
-		placeholders = append(placeholders, "?")
-	}
+	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 
 	query := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
 		strings.Join(columns, ", "),
@@ -748,12 +646,6 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 			node.LastUpdated,
 			checksumVal,
 			string(existenceMapJSON),
-			node.CopyStatus,
-		}
-
-		// Add traversal status values
-		for range db.traversalColumns {
-			values = append(values, types.StatusPending)
 		}
 
 		_, err = stmt.Exec(values...)
@@ -775,7 +667,7 @@ func (db *DB) GetNodeByPath(path, world string) (*types.Node, error) {
 	defer db.mu.Unlock()
 
 	query := `
-SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map, copy_status
+SELECT id, parent_id, name, path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE path = ?`
 
@@ -802,7 +694,6 @@ WHERE path = ?`
 		&node.LastUpdated,
 		&checksumNull,
 		&existenceMapJSON,
-		&node.CopyStatus,
 	)
 
 	if err != nil {

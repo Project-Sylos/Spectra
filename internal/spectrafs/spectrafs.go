@@ -119,12 +119,6 @@ func (s *SpectraFS) ListChildren(req models.ParentIdentifier) (*types.ListResult
 		}
 	}
 
-	// Mark parent as traversed (conditional update - only if not already successful)
-	if err := s.updateTraversalStatus(parent.ID, world, types.StatusSuccessful); err != nil {
-		// Don't fail the whole operation if status update fails
-		fmt.Printf("Warning: Failed to update traversal status: %v\n", err)
-	}
-
 	// Separate folders and files
 	result := &types.ListResult{
 		Success: true,
@@ -241,7 +235,6 @@ func (s *SpectraFS) CreateFolder(req interface {
 		LastUpdated:  time.Now(),
 		Checksum:     nil,
 		ExistenceMap: existenceMap,
-		CopyStatus:   types.CopyStatusPending,
 	}
 
 	// Insert node
@@ -310,7 +303,6 @@ func (s *SpectraFS) UploadFile(req interface {
 		LastUpdated:  time.Now(),
 		Checksum:     &checksum,
 		ExistenceMap: existenceMap,
-		CopyStatus:   types.CopyStatusPending,
 	}
 
 	// Insert node
@@ -359,17 +351,6 @@ func (s *SpectraFS) GetTableInfo() ([]types.TableInfo, error) {
 	return s.db.GetTableInfo()
 }
 
-// updateTraversalStatus updates the traversal status of a node for a specific world
-// This is a private method - traversal status is managed automatically by ListChildren
-func (s *SpectraFS) updateTraversalStatus(nodeID, world, status string) error {
-	// Validate status
-	if status != types.StatusPending && status != types.StatusSuccessful && status != types.StatusFailed {
-		return fmt.Errorf("invalid traversal status: %s", status)
-	}
-
-	return s.db.UpdateTraversalStatus(nodeID, world, status)
-}
-
 // DeleteNode deletes a node using either ID or Path+World
 // Accepts any struct that implements the NodeIdentifier interface
 func (s *SpectraFS) DeleteNode(req models.NodeIdentifier) error {
@@ -403,7 +384,7 @@ func (s *SpectraFS) resolveNodeAndWorld(req interface{}) (*types.Node, string, e
 	var world string
 	var err error
 
-	// Try NodeIdentifier first (for GetNode, DeleteNode, UpdateTraversalStatus)
+	// Try NodeIdentifier first (for GetNode, DeleteNode)
 	if nodeID, ok := req.(models.NodeIdentifier); ok {
 		id := nodeID.GetID()
 		path := nodeID.GetPath()

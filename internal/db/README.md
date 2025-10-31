@@ -72,17 +72,12 @@ CREATE TABLE nodes (
     last_updated TIMESTAMP NOT NULL,
     checksum VARCHAR,
     existence_map JSON NOT NULL DEFAULT '{"primary": true}',
-    traversal_primary VARCHAR NOT NULL DEFAULT 'pending' CHECK (traversal_primary IN ('pending', 'successful', 'failed')),
-    copy_status VARCHAR NOT NULL DEFAULT 'pending' CHECK (copy_status IN ('pending', 'in_progress', 'completed'))
-    -- Dynamic columns: traversal_s1, traversal_s2, etc. added per configuration
 );
 ```
 
 **Key Fields:**
 - `id` - Plain UUID identifier (no prefixes)
 - `existence_map` - JSON map: `{"primary": true, "s1": true, "s2": false}`
-- `traversal_primary`, `traversal_s1`, etc. - Per-world traversal status columns
-- `copy_status` - Migration status tracking
 
 ## Indexes
 
@@ -91,8 +86,6 @@ The nodes table has indexes on:
 - `type` - For filtering by node type
 - `depth_level` - For depth-based queries
 - `path` - For path-based lookups
-- `traversal_primary`, `traversal_s1`, etc. - For per-world status queries
-- `copy_status` - For migration status queries
 
 ## Performance Optimizations
 
