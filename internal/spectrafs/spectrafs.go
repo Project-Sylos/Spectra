@@ -214,13 +214,21 @@ func (s *SpectraFS) CreateFolder(req interface {
 		path = fmt.Sprintf("%s/%s", parent.Path, req.GetName())
 	}
 
-	// Roll dice for existence in each world
+	// Roll dice for existence in each world - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
+
+	// Primary is always true
 	existenceMap["primary"] = true
+
+	// For each secondary world, check parent existence first
 	for worldName, probability := range s.cfg.SecondaryTables {
-		roll := s.rng.Float64()
-		if roll <= probability {
-			existenceMap[worldName] = true
+		// If parent doesn't exist in this world, child cannot exist
+		if !parent.ExistenceMap[worldName] {
+			existenceMap[worldName] = false
+		} else {
+			// Parent exists, so roll dice: roll [0.0, 1.0) must be <= probability
+			roll := s.rng.Float64()
+			existenceMap[worldName] = (roll <= probability)
 		}
 	}
 
@@ -275,7 +283,12 @@ func (s *SpectraFS) UploadFile(req interface {
 
 	// Generate UUID for the new file
 	nodeID := uuid.New().String()
-	path := fmt.Sprintf("%s/%s", parent.Path, req.GetName())
+	var path string
+	if parent.Path == "/" {
+		path = fmt.Sprintf("/%s", req.GetName())
+	} else {
+		path = fmt.Sprintf("%s/%s", parent.Path, req.GetName())
+	}
 
 	// Generate checksum (data not persisted)
 	_, checksum, err := generator.GenerateFileDataForUpload(req.GetData(), s.rng)
@@ -283,13 +296,21 @@ func (s *SpectraFS) UploadFile(req interface {
 		return nil, fmt.Errorf("failed to generate file data: %w", err)
 	}
 
-	// Roll dice for existence in each world
+	// Roll dice for existence in each world - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
+
+	// Primary is always true
 	existenceMap["primary"] = true
+
+	// For each secondary world, check parent existence first
 	for worldName, probability := range s.cfg.SecondaryTables {
-		roll := s.rng.Float64()
-		if roll <= probability {
-			existenceMap[worldName] = true
+		// If parent doesn't exist in this world, child cannot exist
+		if !parent.ExistenceMap[worldName] {
+			existenceMap[worldName] = false
+		} else {
+			// Parent exists, so roll dice: roll [0.0, 1.0) must be <= probability
+			roll := s.rng.Float64()
+			existenceMap[worldName] = (roll <= probability)
 		}
 	}
 

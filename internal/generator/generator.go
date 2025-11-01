@@ -67,15 +67,21 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 	// Generate UUID for the node
 	nodeID := uuid.New().String()
 
-	// Create existence map - start with primary
+	// Create existence map - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
+
+	// Primary is always true
 	existenceMap["primary"] = true
 
-	// Roll dice for each secondary world
+	// For each secondary world, check parent existence first
 	for worldName, probability := range cfg.SecondaryTables {
-		roll := rng.Float64()
-		if roll <= probability {
-			existenceMap[worldName] = true
+		// If parent doesn't exist in this world, child cannot exist
+		if !parent.ExistenceMap[worldName] {
+			existenceMap[worldName] = false
+		} else {
+			// Parent exists, so roll dice: roll [0.0, 1.0) must be <= probability
+			roll := rng.Float64()
+			existenceMap[worldName] = (roll <= probability)
 		}
 	}
 
@@ -108,15 +114,21 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 		return nil, fmt.Errorf("failed to generate file data: %w", err)
 	}
 
-	// Create existence map - start with primary
+	// Create existence map - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
+
+	// Primary is always true
 	existenceMap["primary"] = true
 
-	// Roll dice for each secondary world
+	// For each secondary world, check parent existence first
 	for worldName, probability := range cfg.SecondaryTables {
-		roll := rng.Float64()
-		if roll <= probability {
-			existenceMap[worldName] = true
+		// If parent doesn't exist in this world, child cannot exist
+		if !parent.ExistenceMap[worldName] {
+			existenceMap[worldName] = false
+		} else {
+			// Parent exists, so roll dice: roll [0.0, 1.0) must be <= probability
+			roll := rng.Float64()
+			existenceMap[worldName] = (roll <= probability)
 		}
 	}
 
@@ -158,5 +170,3 @@ func ValidateConfig(cfg *types.Config) error {
 	}
 	return nil
 }
-
-// Note: GenerateSecondaryNodes removed - existence is now determined inline during node generation
