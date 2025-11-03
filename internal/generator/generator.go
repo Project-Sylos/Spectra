@@ -137,6 +137,7 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 		ParentID:     parent.ID,
 		Name:         name,
 		Path:         path,
+		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFile,
 		DepthLevel:   depth,
 		Size:         1024, // 1KB files as specified

@@ -33,13 +33,10 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 
 	// Create secondary tables list and traversal columns map
 	secondaryList := make([]string, 0, len(secondaryTables))
-	traversalCols := make(map[string]string)
-
 
 	// Add secondary worlds
 	for tableName := range secondaryTables {
 		secondaryList = append(secondaryList, tableName)
-		traversalCols[tableName] = "traversal_" + tableName
 	}
 
 	db := &DB{
@@ -74,9 +71,6 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 	if _, err := db.conn.Exec("DROP TABLE IF EXISTS nodes"); err != nil {
 		return fmt.Errorf("failed to drop existing nodes table: %w", err)
 	}
-
-	// Update secondary tables list and traversal columns map
-	db.secondaryTables = make([]string, 0, len(secondaryTables))
 
 	// Build and create unified nodes table with all traversal columns
 	createTableSQL := BuildNodesTableSQL(secondaryTables)
@@ -118,7 +112,6 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 		time.Now(),
 		nil,
 		string(existenceMapJSON),
-		types.CopyStatusPending,
 	}
 
 	insertQuery := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
@@ -540,13 +533,14 @@ func (db *DB) CreateRootNode() error {
 	}
 
 	// Build insert query with all traversal columns
-	columns := []string{"id", "parent_id", "name", "path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 	values := []interface{}{
 		"root",
 		"",
 		"root",
 		"/",
+		"",
 		types.NodeTypeFolder,
 		0,
 		0,

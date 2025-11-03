@@ -31,17 +31,17 @@ type APIConfig struct {
 // Node represents a filesystem node (file or folder) in the DuckDB table
 // Unified single-table design with existence tracking across worlds
 type Node struct {
-	ID                string            `json:"id" db:"id"`                          // UUID identifier
-	ParentID          string            `json:"parent_id" db:"parent_id"`            // UUID parent reference
-	Name              string            `json:"name" db:"name"`                      // Display name
-	Path              string            `json:"path" db:"path"`                      // Relative path
-	ParentPath        string            `json:"parent_path" db:"parent_path"`        // Parent path
-	Type              string            `json:"type" db:"type"`                      // "folder" or "file"
-	DepthLevel        int               `json:"depth_level" db:"depth_level"`        // BFS-style depth index
-	Size              int64             `json:"size" db:"size"`                      // File size (0 for folders)
-	LastUpdated       time.Time         `json:"last_updated" db:"last_updated"`      // Synthetic timestamp
-	Checksum          *string           `json:"checksum" db:"checksum"`              // SHA256 checksum (NULL for folders)
-	ExistenceMap      map[string]bool   `json:"existence_map" db:"existence_map"`    // JSON: {"primary": true, "s1": true, "s2": false}
+	ID           string          `json:"id" db:"id"`                       // UUID identifier
+	ParentID     string          `json:"parent_id" db:"parent_id"`         // UUID parent reference
+	Name         string          `json:"name" db:"name"`                   // Display name
+	Path         string          `json:"path" db:"path"`                   // Relative path
+	ParentPath   string          `json:"parent_path" db:"parent_path"`     // Parent path
+	Type         string          `json:"type" db:"type"`                   // "folder" or "file"
+	DepthLevel   int             `json:"depth_level" db:"depth_level"`     // BFS-style depth index
+	Size         int64           `json:"size" db:"size"`                   // File size (0 for folders)
+	LastUpdated  time.Time       `json:"last_updated" db:"last_updated"`   // Synthetic timestamp
+	Checksum     *string         `json:"checksum" db:"checksum"`           // SHA256 checksum (NULL for folders)
+	ExistenceMap map[string]bool `json:"existence_map" db:"existence_map"` // JSON: {"primary": true, "s1": true, "s2": false}
 }
 
 // Folder represents a folder node
