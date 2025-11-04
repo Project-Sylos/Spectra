@@ -19,7 +19,7 @@ func BuildNodesTableSQL(secondaryTables map[string]float64) string {
 		"size BIGINT NOT NULL",
 		"last_updated TIMESTAMP NOT NULL",
 		"checksum VARCHAR",
-		"existence_map JSON NOT NULL DEFAULT '{\"primary\": true}'",
+		"existence_map TEXT NOT NULL DEFAULT '{\"primary\": true}'",
 	}
 
 	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS nodes (\n    %s\n);", strings.Join(columns, ",\n    "))

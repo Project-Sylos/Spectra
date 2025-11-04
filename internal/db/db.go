@@ -10,25 +10,25 @@ import (
 
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/google/uuid"
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB wraps DuckDB connection and provides single-table CRUD operations
+// DB wraps SQLite connection and provides single-table CRUD operations
 type DB struct {
-	conn             *sql.DB
-	secondaryTables  []string          // List of secondary world names (e.g., ["s1", "s2"])
-	mu               sync.Mutex        // Protects all database operations from concurrent access
+	conn            *sql.DB
+	secondaryTables []string   // List of secondary world names (e.g., ["s1", "s2"])
+	mu              sync.Mutex // Protects all database operations from concurrent access
 }
 
 // New creates a new database connection and initializes the schema
 func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
-	// Open DuckDB connection
-	conn, err := sql.Open("duckdb", dbPath)
+	// Open SQLite connection
+	conn, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open DuckDB connection: %w", err)
+		return nil, fmt.Errorf("failed to open SQLite connection: %w", err)
 	}
 
-	// Register DuckDB driver
+	// Register SQLite driver
 	conn.Driver()
 
 	// Create secondary tables list and traversal columns map
@@ -40,8 +40,8 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 	}
 
 	db := &DB{
-		conn:             conn,
-		secondaryTables:  secondaryList,
+		conn:            conn,
+		secondaryTables: secondaryList,
 	}
 
 	// Initialize schema
@@ -58,14 +58,6 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	// Install and load the JSON extension (required for JSON columns)
-	if _, err := db.conn.Exec("INSTALL json"); err != nil {
-		return fmt.Errorf("failed to install JSON extension: %w", err)
-	}
-	if _, err := db.conn.Exec("LOAD json"); err != nil {
-		return fmt.Errorf("failed to load JSON extension: %w", err)
-	}
 
 	// Drop existing table if it exists (to allow schema recreation)
 	if _, err := db.conn.Exec("DROP TABLE IF EXISTS nodes"); err != nil {
@@ -235,7 +227,7 @@ func (db *DB) GetChildrenByParentID(parentID, world string) ([]*types.Node, erro
 SELECT id, parent_id, name, path, parent_path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE parent_id = ?
-  AND json_extract_string(existence_map, '` + world + `') = 'true'
+  AND json_extract(existence_map, '$."` + world + `"') = true
 ORDER BY type, name`
 
 	rows, err := db.conn.Query(query, parentID)
@@ -301,7 +293,7 @@ func (db *DB) GetParentAndChildren(parentID, world string) ([]*types.Node, error
 SELECT id, parent_id, name, path, parent_path, type, depth_level, size, last_updated, checksum, existence_map
 FROM nodes
 WHERE (id = ? OR parent_id = ?)
-  AND json_extract_string(existence_map, '` + world + `') = 'true'
+  AND json_extract(existence_map, '$."` + world + `"') = true
 ORDER BY 
   CASE WHEN id = ? THEN 0 ELSE 1 END,
   type, name`
@@ -369,7 +361,7 @@ func (db *DB) CheckChildrenExist(parentID, world string) (bool, error) {
 SELECT COUNT(*) 
 FROM nodes 
 WHERE parent_id = ?
-  AND json_extract_string(existence_map, '` + world + `') = 'true'`
+  AND json_extract(existence_map, '$."` + world + `"') = true`
 
 	var count int
 	err := db.conn.QueryRow(query, parentID).Scan(&count)
@@ -423,7 +415,7 @@ func (db *DB) GetNodeCount(world string) (int, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	query := `SELECT COUNT(*) FROM nodes WHERE json_extract_string(existence_map, '` + world + `') = 'true'`
+	query := `SELECT COUNT(*) FROM nodes WHERE json_extract(existence_map, '$."` + world + `"') = true`
 	var count int
 	err := db.conn.QueryRow(query).Scan(&count)
 	if err != nil {
@@ -440,7 +432,7 @@ func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
 	var tables []types.TableInfo
 
 	// Add primary world - inline query to avoid nested locking
-	query := `SELECT COUNT(*) FROM nodes WHERE json_extract_string(existence_map, 'primary') = 'true'`
+	query := `SELECT COUNT(*) FROM nodes WHERE json_extract(existence_map, '$."primary"') = true`
 	var primaryCount int
 	err := db.conn.QueryRow(query).Scan(&primaryCount)
 	if err != nil {
@@ -454,7 +446,7 @@ func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
 
 	// Add secondary worlds - inline queries to avoid nested locking
 	for _, worldName := range db.secondaryTables {
-		query := `SELECT COUNT(*) FROM nodes WHERE json_extract_string(existence_map, '` + worldName + `') = 'true'`
+		query := `SELECT COUNT(*) FROM nodes WHERE json_extract(existence_map, '$."` + worldName + `"') = true`
 		var count int
 		err := db.conn.QueryRow(query).Scan(&count)
 		if err != nil {
@@ -672,7 +664,7 @@ FROM nodes
 WHERE path = ?`
 
 	if world != "" {
-		query += ` AND json_extract_string(existence_map, '` + world + `') = 'true'`
+		query += ` AND json_extract(existence_map, '$."` + world + `"') = true`
 	}
 
 	query += ` LIMIT 1`

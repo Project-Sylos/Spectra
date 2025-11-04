@@ -12,6 +12,7 @@ import (
 
 	"github.com/Project-Sylos/Spectra/internal/api"
 	"github.com/Project-Sylos/Spectra/sdk"
+	_ "github.com/mattn/go-sqlite3" // SQLite driver
 )
 
 func main() {
@@ -81,7 +82,7 @@ func main() {
 	fmt.Printf("Health check available at http://%s/health\n", addr)
 	fmt.Println("Press Ctrl+C to stop the server")
 
-	// I am here to serve. 
+	// I am here to serve.
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Failed to start server: %v", err)
 	}
