@@ -4,22 +4,45 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/google/uuid"
 )
 
-// RNG wraps math/rand.Rand for seeded random generation
+// RNG wraps math/rand.Rand for seeded random generation with thread-safety
 type RNG struct {
-	*rand.Rand
+	mu   sync.Mutex
+	rand *rand.Rand
 }
 
 // NewRNG creates a new seeded random number generator
 func NewRNG(seed int64) *RNG {
 	return &RNG{
-		Rand: rand.New(rand.NewSource(seed)),
+		rand: rand.New(rand.NewSource(seed)),
 	}
+}
+
+// Intn returns a random integer in [0, n) with thread-safety
+func (r *RNG) Intn(n int) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rand.Intn(n)
+}
+
+// Float64 returns a random float64 in [0.0, 1.0) with thread-safety
+func (r *RNG) Float64() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rand.Float64()
+}
+
+// Read fills the slice with random bytes with thread-safety
+func (r *RNG) Read(p []byte) (n int, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rand.Read(p)
 }
 
 // GenerateChildren generates children nodes for a given parent based on configuration
