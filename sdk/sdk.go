@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"fmt"
+	"io/fs"
 
 	"github.com/Project-Sylos/Spectra/internal/spectrafs"
 	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
@@ -122,3 +123,16 @@ const (
 	StatusSuccessful = types.StatusSuccessful
 	StatusFailed     = types.StatusFailed
 )
+
+// AsFS returns an fs.FS instance bound to a specific world
+// This allows SpectraFS to be used with tools like Rclone
+// Each world is projected as its own separate filesystem
+func (s *SpectraFS) AsFS(world string) fs.FS {
+	return spectrafs.NewSpectraFSWrapper(s.impl, world)
+}
+
+// AsFSWithDefaults returns an fs.FS instance using the "primary" world
+// This is a convenience method for the most common use case
+func (s *SpectraFS) AsFSWithDefaults() fs.FS {
+	return s.AsFS("primary")
+}

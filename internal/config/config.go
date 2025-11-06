@@ -27,7 +27,6 @@ func DefaultConfig() types.Config {
 		},
 		SecondaryTables: map[string]float64{
 			"s1": 0.7,
-			"s2": 0.3,
 		},
 	}
 }

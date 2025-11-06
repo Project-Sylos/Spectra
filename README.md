@@ -18,6 +18,7 @@ This design allows engineers to stress-test migration engines (such as Sylos) wi
 * **Deterministic Mode:** When given a seed, the same folder structure is regenerated identically across runs.
 * **Unified Single-Table Architecture:** One table with world-based existence tracking for optimal performance.
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
+* **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone.
 * **DuckDB Persistence:** Each node is stored in a local DuckDB database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out, file size ranges, and naming schemes through the config file or API.
 * **Instant Cleanup:** Simple teardown between tests — delete the DuckDB file and regenerate.
@@ -64,7 +65,7 @@ The system filters nodes by "world" context:
 | **Chi Router**                                          | HTTP router for RESTful API endpoints                 |
 | **Google UUID**                                         | UUID generation for consistent node identification     |
 | **Go's `math/rand`**                                    | Deterministic random generation with seeding           |
-| **Go standard library (`os`, `path/filepath`, `time`)** | Utility functions and path normalization               |
+| **Go standard library (`os`, `path/filepath`, `time`, `io/fs`)** | Utility functions, path normalization, and filesystem interface |
 
 ---
 
@@ -251,6 +252,27 @@ err := fs.DeleteNode(req)
 
 **Design Note:** Each request struct implements the appropriate interfaces (`NodeIdentifier`, `ParentIdentifier`, etc.) for compile-time type safety and runtime validation. Users can pass any struct that implements these interfaces.
 
+### fs.FS Interface
+
+SpectraFS implements Go's standard library `fs.FS` interface, enabling compatibility with tools like Rclone and standard library functions:
+
+```go
+// Create SpectraFS instance
+fs, _ := sdk.New("configs/default.json")
+
+// Get fs.FS for a specific world
+primaryFS := fs.AsFS("primary")
+s1FS := fs.AsFS("s1")
+
+// Use with standard library
+import "io/fs"
+
+data, _ := fs.ReadFile(primaryFS, "folder/file.txt")
+entries, _ := fs.ReadDir(primaryFS, "folder")
+```
+
+**World Projection:** Each world is projected as a separate filesystem, allowing tools like Rclone to treat each world as an independent remote. This enables comparison and synchronization between different world projections.
+
 ---
 
 ## Usage
@@ -359,8 +381,10 @@ A production-ready HTTP server that exposes the Spectra filesystem via RESTful A
 * **Migration Engine Testing:** Validate traversal and BFS logic with reproducible data.
 * **Performance Benchmarks:** Measure traversal throughput without real I/O.
 * **Integration Testing:** Simulate different storage backends through the same API shape.
+* **Rclone Integration:** Use SpectraFS as a backend for Rclone, enabling comparison and synchronization between different world projections.
 * **Chaos Simulation:** Test rate limiting, throttling, or transient "missing node" scenarios.
 * **Multi-Source Testing:** Test migration scenarios with multiple data sources and probability-based data distribution.
+* **Standard Library Compatibility:** Use with any tool or library that works with Go's `fs.FS` interface.
 
 ---
 

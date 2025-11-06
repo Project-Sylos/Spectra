@@ -2,6 +2,10 @@ package spectrafs
 
 import (
 	"fmt"
+	"hash/fnv"
+	"io"
+	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/Project-Sylos/Spectra/internal/config"
@@ -150,16 +154,31 @@ func (s *SpectraFS) GetNode(req models.NodeIdentifier) (*types.Node, error) {
 	path := req.GetPath()
 	tableName := req.GetTableName()
 
+	var (
+		node *types.Node
+		err  error
+	)
+
 	if id != "" {
-		return s.db.GetNodeByID(id)
+		node, err = s.db.GetNodeByID(id)
 	} else if path != "" {
 		if tableName == "" {
 			tableName = "primary" // Default to primary world
 		}
-		return s.db.GetNodeByPath(path, tableName)
+		node, err = s.db.GetNodeByPath(path, tableName)
+	} else {
+		return nil, fmt.Errorf("either id or path must be specified")
 	}
 
-	return nil, fmt.Errorf("either id or path must be specified")
+	if err != nil {
+		return nil, err
+	}
+
+	if node == nil {
+		return nil, fmt.Errorf("node not found")
+	}
+
+	return node, nil
 }
 
 // GetFileData generates 1KB random data and checksum for a file (not persisted)
@@ -448,4 +467,198 @@ func (s *SpectraFS) resolveNodeAndWorld(req interface{}) (*types.Node, string, e
 	}
 
 	return nil, "", fmt.Errorf("unsupported request type - must implement NodeIdentifier or ParentIdentifier")
+}
+
+// getFileDataDeterministic generates deterministic file data based on node ID
+// This ensures the same file always returns the same data, which is required for fs.FS
+func (s *SpectraFS) getFileDataDeterministic(nodeID string) ([]byte, error) {
+	// Use node ID to create a deterministic seed
+	hash := fnv.New64a()
+	hash.Write([]byte(nodeID))
+	seed := int64(hash.Sum64())
+
+	// Create a deterministic RNG for this specific file
+	fileRNG := generator.NewRNG(seed)
+
+	// Generate 1KB of deterministic data
+	data, _, err := generator.GenerateFileData(fileRNG)
+	return data, err
+}
+
+// SpectraFSWrapper wraps SpectraFS to implement fs.FS interface for a specific world
+type SpectraFSWrapper struct {
+	fs    *SpectraFS
+	world string
+}
+
+// NewSpectraFSWrapper creates a new fs.FS wrapper for a specific world
+func NewSpectraFSWrapper(fs *SpectraFS, world string) *SpectraFSWrapper {
+	if world == "" {
+		world = "primary"
+	}
+	return &SpectraFSWrapper{
+		fs:    fs,
+		world: world,
+	}
+}
+
+// Open opens the named file or directory
+func (w *SpectraFSWrapper) Open(name string) (fs.File, error) {
+	// Normalize path - handle root specially
+	path := name
+	if path == "." || path == "" {
+		path = "/"
+	} else if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// Validate path (skip validation for root "/")
+	if path != "/" && !fs.ValidPath(strings.TrimPrefix(path, "/")) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
+
+	// Get node by path in the bound world
+	req := &models.GetNodeRequest{
+		Path:      path,
+		TableName: w.world,
+	}
+
+	node, err := w.fs.GetNode(req)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+
+	// Check if node exists in the requested world
+	if !node.ExistenceMap[w.world] {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+
+	// Return appropriate file handle
+	if node.Type == types.NodeTypeFolder {
+		// For directories, we need to list children
+		listReq := &models.ListChildrenRequest{
+			ParentPath: path,
+			TableName:  w.world,
+		}
+
+		result, err := w.fs.ListChildren(listReq)
+		if err != nil {
+			return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+		}
+
+		// Convert to DirEntry slice
+		entries := make([]fs.DirEntry, 0, len(result.Folders)+len(result.Files))
+		for _, folder := range result.Folders {
+			entries = append(entries, NewDirEntry(&folder.Node))
+		}
+		for _, file := range result.Files {
+			entries = append(entries, NewDirEntry(&file.Node))
+		}
+
+		return &spectraDir{
+			node:    node,
+			entries: entries,
+		}, nil
+	}
+
+	// For files, generate deterministic data
+	data, err := w.fs.getFileDataDeterministic(node.ID)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+	}
+
+	return &spectraFile{
+		node:   node,
+		data:   data,
+		offset: 0,
+	}, nil
+}
+
+// ReadFile reads the named file and returns its contents
+func (w *SpectraFSWrapper) ReadFile(name string) ([]byte, error) {
+	file, err := w.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	if info.IsDir() {
+		return nil, &fs.PathError{Op: "readfile", Path: name, Err: fmt.Errorf("is a directory")}
+	}
+
+	// Read all data - we know the exact size, so use ReadFull
+	data := make([]byte, info.Size())
+	_, err = io.ReadFull(file, data)
+	if err != nil {
+		// ReadFull may return EOF or ErrUnexpectedEOF if not all bytes read
+		// This shouldn't happen with our implementation, but handle gracefully
+		return nil, &fs.PathError{Op: "readfile", Path: name, Err: err}
+	}
+
+	return data, nil
+}
+
+// ReadDir reads the named directory and returns a list of directory entries
+func (w *SpectraFSWrapper) ReadDir(name string) ([]fs.DirEntry, error) {
+	file, err := w.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	dir, ok := file.(fs.ReadDirFile)
+	if !ok {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fmt.Errorf("not a directory")}
+	}
+
+	entries, err := dir.ReadDir(-1)
+	if err != nil && err != fs.ErrClosed {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
+	}
+
+	return entries, nil
+}
+
+// Stat returns a FileInfo describing the named file
+func (w *SpectraFSWrapper) Stat(name string) (fs.FileInfo, error) {
+	// Normalize path
+	path := name
+	if path == "." || path == "" {
+		path = "/"
+	} else if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// Validate path (skip validation for root "/")
+	if path != "/" && !fs.ValidPath(strings.TrimPrefix(path, "/")) {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	}
+
+	// Get node by path in the bound world
+	req := &models.GetNodeRequest{
+		Path:      path,
+		TableName: w.world,
+	}
+
+	node, err := w.fs.GetNode(req)
+	if err != nil {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
+	}
+
+	// Check if node exists in the requested world
+	if !node.ExistenceMap[w.world] {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
+	}
+
+	return NewFileInfo(node), nil
+}
+
+// Glob returns the names of all files matching pattern
+func (w *SpectraFSWrapper) Glob(pattern string) ([]string, error) {
+	return fs.Glob(w, pattern)
 }

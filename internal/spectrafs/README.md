@@ -6,7 +6,10 @@ The SpectraFS package contains the core filesystem simulator logic. It orchestra
 
 ```
 spectrafs/
-└── spectrafs.go  # Core filesystem simulator implementation
+├── spectrafs.go  # Core filesystem simulator implementation
+├── file.go       # fs.File and fs.ReadDirFile implementations
+├── fileinfo.go   # fs.FileInfo implementation
+└── direntry.go   # fs.DirEntry implementation
 ```
 
 ## Core Responsibilities
@@ -58,6 +61,11 @@ All operations use interface-based request structs for flexible lookup (by ID or
 - `GetNodeCount(world)` - Count nodes in specific world
 - `GetFileData(id)` - Generate and return file data with checksum
 - `GetSecondaryTables()` - Get list of configured secondary worlds
+
+### fs.FS Interface Support
+- `NewSpectraFSWrapper(fs *SpectraFS, world string) *SpectraFSWrapper` - Creates an `fs.FS` wrapper bound to a specific world
+- `SpectraFSWrapper` implements `fs.FS`, `fs.ReadFileFS`, `fs.ReadDirFS`, `fs.StatFS`, and `fs.GlobFS`
+- Each world can be projected as a separate filesystem for compatibility with Go standard library and tools like Rclone
 
 ## ListChildren Logic (Optimized)
 
@@ -157,4 +165,34 @@ err = fs.UpdateTraversalStatus(&models.UpdateTraversalStatusRequest{
     ID:     "abc123-...",
     Status: "successful",
 })
+
+// Create fs.FS wrapper for a specific world
+fsWrapper := spectrafs.NewSpectraFSWrapper(fs, "primary")
+
+// Use with standard library functions
+import "io/fs"
+
+data, err := fs.ReadFile(fsWrapper, "folder/file.txt")
+entries, err := fs.ReadDir(fsWrapper, "folder")
+info, err := fs.Stat(fsWrapper, "folder/file.txt")
 ```
+
+## fs.FS Interface Implementation
+
+SpectraFS provides a complete implementation of Go's standard library `fs.FS` interface, enabling compatibility with tools like Rclone and standard library functions.
+
+### Key Features
+
+- **World-Aware Projection**: Each world (primary, s1, s2, etc.) can be projected as a separate filesystem
+- **Deterministic File Data**: File data is generated deterministically based on node ID, ensuring consistency
+- **Extended Interfaces**: Implements `fs.ReadFileFS`, `fs.ReadDirFS`, `fs.StatFS`, and `fs.GlobFS` for optimized operations
+- **Path Handling**: Properly handles root path "/" and normalizes paths according to `fs.FS` conventions
+- **Error Handling**: Uses `fs.PathError` for proper error reporting
+
+### Implementation Details
+
+The `SpectraFSWrapper` struct wraps a `SpectraFS` instance and binds it to a specific world. When operations are performed through the wrapper, they automatically filter by the bound world's `existence_map`.
+
+- **File Data Generation**: File data is generated on-demand using a deterministic seed derived from the node ID
+- **Directory Listings**: Directories trigger lazy generation if children don't exist, then filter by world
+- **Path Validation**: Uses `fs.ValidPath` for path validation, with special handling for root path "/"

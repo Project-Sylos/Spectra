@@ -51,6 +51,10 @@ type SpectraFS struct {
 #### Status Operations
 - `UpdateTraversalStatus(req *UpdateTraversalStatusRequest)` - Update node traversal status (supports ID or Path+TableName lookup)
 
+#### fs.FS Interface Operations
+- `AsFS(world string) fs.FS` - Returns an `fs.FS` instance bound to a specific world for compatibility with Go standard library and tools like Rclone
+- `AsFSWithDefaults() fs.FS` - Returns an `fs.FS` instance using the "primary" world (convenience method)
+
 ## Type Re-exports
 
 The SDK re-exports commonly used types for convenience:
@@ -214,6 +218,45 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+### fs.FS Interface Usage
+
+SpectraFS implements Go's standard library `fs.FS` interface, enabling compatibility with tools like Rclone and standard library functions. Each world can be projected as a separate filesystem:
+
+```go
+// Create SpectraFS instance
+fs, _ := sdk.New("configs/default.json")
+
+// Get fs.FS for primary world
+primaryFS := fs.AsFS("primary")
+
+// Get fs.FS for secondary world
+s1FS := fs.AsFS("s1")
+
+// Use with standard library functions
+import "io/fs"
+
+// Read a file
+data, err := fs.ReadFile(primaryFS, "folder/file.txt")
+
+// Read directory entries
+entries, err := fs.ReadDir(primaryFS, "folder")
+
+// Stat a file
+info, err := fs.Stat(primaryFS, "folder/file.txt")
+
+// Walk directory tree
+fs.WalkDir(primaryFS, ".", func(path string, d fs.DirEntry, err error) error {
+    // Process each entry
+    return nil
+})
+
+// Use with glob patterns
+matches, err := fs.Glob(primaryFS, "**/*.txt")
+```
+
+**World Projection:**
+Each world (primary, s1, s2, etc.) is projected as its own separate filesystem. This allows tools like Rclone to treat each world as an independent remote, enabling comparison and synchronization between different world projections. All wrappers share the same underlying SpectraFS instance, ensuring consistency while allowing world-specific filtering.
 
 ## Error Handling
 
