@@ -412,4 +412,4 @@ See `configs/default.json` for a complete example.
 
 ## License
 
-This project is part of the Sylos ecosystem and follows the same licensing terms.
+This project is part of the Sylos ecosystem and follows the same overall copyright laws and protections, however this specific library uses an MIT license to permit the community to utilize it and update it as they see fit. <3 
