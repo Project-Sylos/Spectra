@@ -131,8 +131,9 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 	// Generate UUID for the node
 	nodeID := uuid.New().String()
 
-	// Generate file data and checksum
-	_, checksum, err := GenerateFileData(rng)
+	// Generate file data and checksum deterministically so repeated reads always
+	// return identical content, regardless of node identity
+	data, checksum, err := GenerateDeterministicFileData(cfg.Seed.FileBinarySeed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate file data: %w", err)
 	}
@@ -163,22 +164,11 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFile,
 		DepthLevel:   depth,
-		Size:         1024, // 1KB files as specified
+		Size:         int64(len(data)),
 		LastUpdated:  time.Now(),
 		Checksum:     &checksum, // Store the computed checksum
 		ExistenceMap: existenceMap,
 	}, nil
-}
-
-// GenerateFileDataForUpload generates random data and checksum for uploaded files
-// This is used when someone uploads file data - we compute checksum but don't persist the data
-func GenerateFileDataForUpload(uploadedData []byte, rng *RNG) ([]byte, string, error) {
-	// Generate 1KB of random data (we ignore the uploaded data as per requirements)
-	data, checksum, err := GenerateFileData(rng)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to generate file data: %w", err)
-	}
-	return data, checksum, nil
 }
 
 // ValidateConfig validates the generator configuration

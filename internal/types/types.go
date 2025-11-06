@@ -13,13 +13,14 @@ type Config struct {
 
 // SeedConfig represents the filesystem generation configuration
 type SeedConfig struct {
-	MaxDepth   int    `json:"max_depth"`
-	MinFolders int    `json:"min_folders"`
-	MaxFolders int    `json:"max_folders"`
-	MinFiles   int    `json:"min_files"`
-	MaxFiles   int    `json:"max_files"`
-	Seed       int64  `json:"seed"`
-	DBPath     string `json:"db_path"`
+	MaxDepth       int    `json:"max_depth"`
+	MinFolders     int    `json:"min_folders"`
+	MaxFolders     int    `json:"max_folders"`
+	MinFiles       int    `json:"min_files"`
+	MaxFiles       int    `json:"max_files"`
+	Seed           int64  `json:"seed"`
+	DBPath         string `json:"db_path"`
+	FileBinarySeed int64  `json:"file_binary_seed,omitempty"`
 }
 
 // APIConfig represents the HTTP API configuration

@@ -13,13 +13,14 @@ import (
 func DefaultConfig() types.Config {
 	return types.Config{
 		Seed: types.SeedConfig{
-			MaxDepth:   4,
-			MinFolders: 1,
-			MaxFolders: 3,
-			MinFiles:   2,
-			MaxFiles:   5,
-			Seed:       42,
-			DBPath:     "./spectra.db",
+			MaxDepth:       4,
+			MinFolders:     1,
+			MaxFolders:     3,
+			MinFiles:       2,
+			MaxFiles:       5,
+			Seed:           42,
+			DBPath:         "./spectra.db",
+			FileBinarySeed: 0,
 		},
 		API: types.APIConfig{
 			Host: "localhost",
@@ -85,7 +86,7 @@ func Validate(cfg *types.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
 	}
-	
+
 	// Validate seed config
 	if cfg.Seed.MaxDepth < 1 {
 		return fmt.Errorf("max_depth must be at least 1, got %d", cfg.Seed.MaxDepth)

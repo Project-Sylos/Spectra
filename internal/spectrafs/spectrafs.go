@@ -2,7 +2,6 @@ package spectrafs
 
 import (
 	"fmt"
-	"hash/fnv"
 	"io"
 	"io/fs"
 	"strings"
@@ -181,7 +180,7 @@ func (s *SpectraFS) GetNode(req models.NodeIdentifier) (*types.Node, error) {
 	return node, nil
 }
 
-// GetFileData generates 1KB random data and checksum for a file (not persisted)
+// GetFileData generates deterministic file data and checksum for a file (not persisted)
 func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
 	// Verify the node exists and is a file
 	node, err := s.db.GetNodeByID(id)
@@ -193,11 +192,12 @@ func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("node %s is not a file", id)
 	}
 
-	// Generate random data and checksum
-	data, checksum, err := generator.GenerateFileData(s.rng)
+	// Generate deterministic data and checksum
+	data, checksum, err := s.getFileDataDeterministic(node.ID)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to generate file data: %w", err)
 	}
+
 	return data, checksum, nil
 }
 
@@ -309,8 +309,8 @@ func (s *SpectraFS) UploadFile(req interface {
 		path = fmt.Sprintf("%s/%s", parent.Path, req.GetName())
 	}
 
-	// Generate checksum (data not persisted)
-	_, checksum, err := generator.GenerateFileDataForUpload(req.GetData(), s.rng)
+	// Generate deterministic file data metadata (data itself is not persisted)
+	data, checksum, err := generator.GenerateDeterministicFileData(s.cfg.Seed.FileBinarySeed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate file data: %w", err)
 	}
@@ -341,7 +341,7 @@ func (s *SpectraFS) UploadFile(req interface {
 		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFile,
 		DepthLevel:   parent.DepthLevel + 1,
-		Size:         1024, // 1KB as specified
+		Size:         int64(len(data)),
 		LastUpdated:  time.Now(),
 		Checksum:     &checksum,
 		ExistenceMap: existenceMap,
@@ -469,20 +469,10 @@ func (s *SpectraFS) resolveNodeAndWorld(req interface{}) (*types.Node, string, e
 	return nil, "", fmt.Errorf("unsupported request type - must implement NodeIdentifier or ParentIdentifier")
 }
 
-// getFileDataDeterministic generates deterministic file data based on node ID
-// This ensures the same file always returns the same data, which is required for fs.FS
-func (s *SpectraFS) getFileDataDeterministic(nodeID string) ([]byte, error) {
-	// Use node ID to create a deterministic seed
-	hash := fnv.New64a()
-	hash.Write([]byte(nodeID))
-	seed := int64(hash.Sum64())
-
-	// Create a deterministic RNG for this specific file
-	fileRNG := generator.NewRNG(seed)
-
-	// Generate 1KB of deterministic data
-	data, _, err := generator.GenerateFileData(fileRNG)
-	return data, err
+// getFileDataDeterministic generates deterministic file data using the configured binary seed
+// This ensures every retrieval returns the same data, satisfying tools that rely on stable content
+func (s *SpectraFS) getFileDataDeterministic(nodeID string) ([]byte, string, error) {
+	return generator.GenerateDeterministicFileData(s.cfg.Seed.FileBinarySeed)
 }
 
 // SpectraFSWrapper wraps SpectraFS to implement fs.FS interface for a specific world
@@ -562,7 +552,7 @@ func (w *SpectraFSWrapper) Open(name string) (fs.File, error) {
 	}
 
 	// For files, generate deterministic data
-	data, err := w.fs.getFileDataDeterministic(node.ID)
+	data, _, err := w.fs.getFileDataDeterministic(node.ID)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
