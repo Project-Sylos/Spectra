@@ -6,7 +6,7 @@
 
 ## Overview
 
-Spectra behaves like a mock filesystem. Instead of relying on actual disk I/O, it **procedurally generates** folders and files based on configuration parameters (min/max depth, file counts, folder counts, etc.). Each generated node is **persisted to a DuckDB database** with multi-table support, enabling reproducible state across test runs.
+Spectra behaves like a mock filesystem. Instead of relying on actual disk I/O, it **procedurally generates** folders and files based on configuration parameters (min/max depth, file counts, folder counts, etc.). Each generated node is **persisted to an embedded SQLite database** with multi-table support, enabling reproducible state across test runs.
 
 This design allows engineers to stress-test migration engines (such as Sylos) without interacting with real file systems or cloud APIs.
 
@@ -19,9 +19,9 @@ This design allows engineers to stress-test migration engines (such as Sylos) wi
 * **Unified Single-Table Architecture:** One table with world-based existence tracking for optimal performance.
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
 * **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone.
-* **DuckDB Persistence:** Each node is stored in a local DuckDB database with metadata for path, type, size, timestamps, etc.
+* **SQLite Persistence:** Each node is stored in a local SQLite database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out, file size ranges, and naming schemes through the config file or API.
-* **Instant Cleanup:** Simple teardown between tests — delete the DuckDB file and regenerate.
+* **Instant Cleanup:** Simple teardown between tests — delete the SQLite database file and regenerate.
 * **Plain UUID IDs:** Simple unique identifiers without prefixes.
 * **Optimized Queries:** Vectorized queries reduce database round trips by 3-4x.
 
@@ -61,7 +61,7 @@ The system filters nodes by "world" context:
 | Component                                               | Purpose                                                |
 | ------------------------------------------------------- | ------------------------------------------------------ |
 | **Go (Golang)**                                         | Core implementation language                           |
-| **DuckDB**                                              | Lightweight embedded SQL database for node persistence |
+| **SQLite**                                              | Lightweight embedded SQL database for node persistence |
 | **Chi Router**                                          | HTTP router for RESTful API endpoints                 |
 | **Google UUID**                                         | UUID generation for consistent node identification     |
 | **Go's `math/rand`**                                    | Deterministic random generation with seeding           |
@@ -102,7 +102,7 @@ Spectra/
 
 ### Node Generation
 
-Spectra represents all nodes as entries in a unified DuckDB table:
+Spectra represents all nodes as entries in a unified SQLite table:
 
 | Column               | Type      | Description                                                |
 | -------------------- | --------- | --------------------------------------------------------   |
@@ -324,30 +324,15 @@ curl -X POST http://localhost:8086/api/v1/file/upload \
 
 ## Development Setup
 
-### Windows Setup
-Run the provided PowerShell script to set up the development environment:
+Spectra relies on Go's SQLite bindings, so setup is lightweight:
 
-```powershell
-.\dev_setup_scripts\windows.ps1
-```
-
-This script will:
-- Install MSYS2 and GCC for CGO support
-- Set up DuckDB binaries
-- Configure environment variables
-- Install Go dependencies
-
-**Note**: Spectra uses `go-duckdb v1.7.0` and `apache/arrow/go/v14 v14.0.2` for Windows compatibility. These versions are known to work well with the Windows CGO setup.
-
-### Manual Setup
-1. Install Go 1.24.2 or later
-2. Install DuckDB with CGO support
-3. Run `go mod tidy` to install dependencies
-4. Build applications:
+1. Install Go 1.24.2 or later.
+2. Clone the repository and run `go mod tidy` to pull dependencies.
+3. (Optional) Build local binaries:
    ```bash
    # Build SDK demo
    go build -o bin/spectra-demo main.go
-   
+
    # Build API server
    go build -o bin/spectra-api cmd/api/main.go
    ```

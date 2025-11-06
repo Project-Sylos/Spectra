@@ -104,7 +104,7 @@ The types package is used throughout the application to ensure type safety and c
 
 ## JSON Tags
 
-All types include JSON tags for API serialization and database tags for DuckDB operations. This ensures consistent data representation across all layers.
+All types include JSON tags for API serialization and database tags for SQLite operations. This ensures consistent data representation across all layers.
 
 ## Validation
 

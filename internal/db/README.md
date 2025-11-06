@@ -1,6 +1,6 @@
 # Database Package
 
-The database package provides the data persistence layer for Spectra using DuckDB. It implements a unified single-table architecture with per-world existence tracking for maximum performance.
+The database package provides the data persistence layer for Spectra using SQLite. It implements a unified single-table architecture with per-world existence tracking for maximum performance.
 
 ## Structure
 
