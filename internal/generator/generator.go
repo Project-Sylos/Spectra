@@ -3,7 +3,7 @@ package generator
 import (
 	"fmt"
 	"math/rand"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +85,7 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 // generateFolder creates a new folder node with UUID and ExistenceMap
 func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("folder_%d", index)
-	path := filepath.Join(parent.Path, name)
+	path := joinPath(parent.Path, name)
 
 	// Generate UUID for the node
 	nodeID := uuid.New().String()
@@ -126,7 +126,7 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 // generateFile creates a new file node with UUID and ExistenceMap
 func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("file_%d.txt", index)
-	path := filepath.Join(parent.Path, name)
+	path := joinPath(parent.Path, name)
 
 	// Generate UUID for the node
 	nodeID := uuid.New().String()
@@ -183,4 +183,26 @@ func ValidateConfig(cfg *types.Config) error {
 		return fmt.Errorf("invalid file count range: min=%d, max=%d", cfg.Seed.MinFiles, cfg.Seed.MaxFiles)
 	}
 	return nil
+}
+
+// joinPath joins path parts using forward slashes regardless of host OS.
+// It strips leading/trailing slashes from each component, then prefixes the result with "/".
+// When no components remain, it returns the root path "/".
+func joinPath(parts ...string) string {
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		part = strings.Trim(part, "/")
+		if part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+
+	if len(cleaned) == 0 {
+		return "/"
+	}
+
+	return "/" + strings.Join(cleaned, "/")
 }
