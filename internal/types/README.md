@@ -66,7 +66,7 @@ Standardized API response structures:
 type APIResponse struct {
     Success bool        `json:"success"`
     Message string      `json:"message"`
-    Data    interface{} `json:"data,omitempty"`
+    Data    any `json:"data,omitempty"`
 }
 
 type ListResult struct {

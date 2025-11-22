@@ -12,6 +12,7 @@ import (
 	"github.com/Project-Sylos/Spectra/internal/generator"
 	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
 	"github.com/Project-Sylos/Spectra/internal/types"
+	"github.com/Project-Sylos/Spectra/internal/utils"
 	"github.com/google/uuid"
 )
 
@@ -226,12 +227,7 @@ func (s *SpectraFS) CreateFolder(req interface {
 
 	// Create folder node with UUID
 	nodeID := uuid.New().String()
-	var path string
-	if parent.Path == "/" {
-		path = fmt.Sprintf("/%s", req.GetName())
-	} else {
-		path = fmt.Sprintf("%s/%s", parent.Path, req.GetName())
-	}
+	path := utils.JoinPath(parent.Path, req.GetName())
 
 	// Roll dice for existence in each world - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
@@ -302,12 +298,7 @@ func (s *SpectraFS) UploadFile(req interface {
 
 	// Generate UUID for the new file
 	nodeID := uuid.New().String()
-	var path string
-	if parent.Path == "/" {
-		path = fmt.Sprintf("/%s", req.GetName())
-	} else {
-		path = fmt.Sprintf("%s/%s", parent.Path, req.GetName())
-	}
+	path := utils.JoinPath(parent.Path, req.GetName())
 
 	// Generate deterministic file data metadata (data itself is not persisted)
 	data, checksum, err := generator.GenerateDeterministicFileData(s.cfg.Seed.FileBinarySeed)
@@ -373,7 +364,8 @@ func (s *SpectraFS) Reset() error {
 	return nil
 }
 
-// Close closes the database connection
+// Close closes the database connection after performing a WAL checkpoint to ensure data persistence.
+// This ensures all changes are fully saved before the process finishes.
 func (s *SpectraFS) Close() error {
 	return s.db.Close()
 }
@@ -421,7 +413,7 @@ func (s *SpectraFS) GetSecondaryTables() []string {
 // resolveNodeAndWorld resolves a node and world from a request using interfaces
 // Supports both NodeIdentifier (for ID or Path+World) and ParentIdentifier (for ParentID or ParentPath+World)
 // Returns the node and the world name (defaults to "primary" if not specified)
-func (s *SpectraFS) resolveNodeAndWorld(req interface{}) (*types.Node, string, error) {
+func (s *SpectraFS) resolveNodeAndWorld(req any) (*types.Node, string, error) {
 	var node *types.Node
 	var world string
 	var err error

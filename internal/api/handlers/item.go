@@ -150,7 +150,7 @@ func (h *ItemHandler) GetFileData(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"data":     data,
 		"checksum": checksum,
 		"size":     len(data),

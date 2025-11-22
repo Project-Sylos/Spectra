@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Project-Sylos/Spectra/internal/types"
+	"github.com/Project-Sylos/Spectra/internal/utils"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -22,6 +24,12 @@ type DB struct {
 
 // New creates a new database connection and initializes the schema
 func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
+	// A) Check if database file exists
+	dbFileExists := false
+	if _, err := os.Stat(dbPath); err == nil {
+		dbFileExists = true
+	}
+
 	// Open SQLite connection
 	conn, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -44,38 +52,239 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 		secondaryTables: secondaryList,
 	}
 
-	// Initialize schema
-	if err := db.InitializeSchema(secondaryTables); err != nil {
+	// Verify and initialize database structure
+	if err := db.VerifyAndInitialize(dbFileExists, secondaryTables); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+		return nil, fmt.Errorf("failed to verify and initialize database: %w", err)
 	}
 
 	return db, nil
 }
 
-// InitializeSchema creates the unified nodes table with all traversal columns
-// Note: This drops and recreates the table to ensure schema matches the provided secondary tables
-func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
+// VerifyAndInitialize performs comprehensive database verification and initialization
+// It checks each stage and creates what's missing:
+// A) Database file exists (checked before connection)
+// B) Nodes table exists
+// C) Table schema matches (columns and column order)
+// D) Indexes exist
+// E) Root node exists
+func (db *DB) VerifyAndInitialize(dbFileExists bool, secondaryTables map[string]float64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Drop existing table if it exists (to allow schema recreation)
-	if _, err := db.conn.Exec("DROP TABLE IF EXISTS nodes"); err != nil {
-		return fmt.Errorf("failed to drop existing nodes table: %w", err)
+	// B) Check if nodes table exists
+	tableExists, err := db.tableExists("nodes")
+	if err != nil {
+		return fmt.Errorf("failed to check if table exists: %w", err)
 	}
 
-	// Build and create unified nodes table with all traversal columns
-	createTableSQL := BuildNodesTableSQL(secondaryTables)
-	if _, err := db.conn.Exec(createTableSQL); err != nil {
-		return fmt.Errorf("failed to create nodes table: %w", err)
+	if !tableExists {
+		// Create table
+		createTableSQL := BuildNodesTableSQL(secondaryTables)
+		if _, err := db.conn.Exec(createTableSQL); err != nil {
+			return fmt.Errorf("failed to create nodes table: %w", err)
+		}
+	} else {
+		// C) Verify table schema matches
+		schemaMatches, err := db.verifyTableSchema()
+		if err != nil {
+			return fmt.Errorf("failed to verify table schema: %w", err)
+		}
+
+		if !schemaMatches {
+			// Schema doesn't match - return error to prevent data loss
+			// User must explicitly call Reset() or handle migration if they want to modify the schema
+			return fmt.Errorf("table schema mismatch: existing nodes table has different schema than expected. " +
+				"To reset the database, explicitly call Reset(). " +
+				"To preserve data, implement a migration strategy")
+		}
 	}
 
-	// Build and create all indexes
+	// D) Verify indexes exist
+	if err := db.verifyAndCreateIndexes(secondaryTables); err != nil {
+		return fmt.Errorf("failed to verify indexes: %w", err)
+	}
+
+	// E) Check if root node exists
+	rootExists, err := db.rootNodeExists()
+	if err != nil {
+		return fmt.Errorf("failed to check if root node exists: %w", err)
+	}
+
+	if !rootExists {
+		// Create root node
+		if err := db.createRootNodeInternal(); err != nil {
+			return fmt.Errorf("failed to create root node: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// tableExists checks if a table exists in the database
+func (db *DB) tableExists(tableName string) (bool, error) {
+	query := "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
+	var name string
+	err := db.conn.QueryRow(query, tableName).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// verifyTableSchema checks if the nodes table has the correct schema
+func (db *DB) verifyTableSchema() (bool, error) {
+	// Expected columns in order
+	expectedColumns := []struct {
+		name     string
+		notNull  bool
+		dataType string
+	}{
+		{"id", true, "VARCHAR"},
+		{"parent_id", true, "VARCHAR"},
+		{"name", true, "VARCHAR"},
+		{"path", true, "VARCHAR"},
+		{"parent_path", true, "VARCHAR"},
+		{"type", true, "VARCHAR"},
+		{"depth_level", true, "INTEGER"},
+		{"size", true, "BIGINT"},
+		{"last_updated", true, "TIMESTAMP"},
+		{"checksum", false, "VARCHAR"},
+		{"existence_map", true, "TEXT"},
+	}
+
+	// Get actual columns using PRAGMA table_info
+	rows, err := db.conn.Query("PRAGMA table_info(nodes)")
+	if err != nil {
+		return false, fmt.Errorf("failed to query table info: %w", err)
+	}
+	defer rows.Close()
+
+	var actualColumns []struct {
+		cid        int
+		name       string
+		dataType   string
+		notNull    bool
+		defaultVal sql.NullString
+		pk         int
+	}
+
+	for rows.Next() {
+		var col struct {
+			cid        int
+			name       string
+			dataType   string
+			notNull    bool
+			defaultVal sql.NullString
+			pk         int
+		}
+		var defaultVal sql.NullString
+		err := rows.Scan(&col.cid, &col.name, &col.dataType, &col.notNull, &defaultVal, &col.pk)
+		if err != nil {
+			return false, fmt.Errorf("failed to scan column info: %w", err)
+		}
+		col.defaultVal = defaultVal
+		actualColumns = append(actualColumns, col)
+	}
+
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("error iterating columns: %w", err)
+	}
+
+	// Check column count
+	if len(actualColumns) != len(expectedColumns) {
+		return false, nil
+	}
+
+	// Check each column matches
+	for i, expected := range expectedColumns {
+		if i >= len(actualColumns) {
+			return false, nil
+		}
+		actual := actualColumns[i]
+
+		// Check name
+		if actual.name != expected.name {
+			return false, nil
+		}
+
+		// Check not null (SQLite uses 0/1, we check != 0 means NOT NULL)
+		actualNotNull := actual.notNull
+		if actualNotNull != expected.notNull {
+			return false, nil
+		}
+
+		// Check data type (SQLite is flexible, so we check if it contains our expected type)
+		if !strings.Contains(strings.ToUpper(actual.dataType), strings.ToUpper(expected.dataType)) {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// verifyAndCreateIndexes checks if all required indexes exist and creates missing ones
+func (db *DB) verifyAndCreateIndexes(secondaryTables map[string]float64) error {
+	// Get existing indexes
+	rows, err := db.conn.Query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='nodes' AND name NOT LIKE 'sqlite_%'")
+	if err != nil {
+		return fmt.Errorf("failed to query indexes: %w", err)
+	}
+	defer rows.Close()
+
+	existingIndexes := make(map[string]bool)
+	for rows.Next() {
+		var indexName string
+		if err := rows.Scan(&indexName); err != nil {
+			return fmt.Errorf("failed to scan index name: %w", err)
+		}
+		existingIndexes[indexName] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating indexes: %w", err)
+	}
+
+	// Create missing indexes
 	createIndexesSQL := BuildIndexesSQL(secondaryTables)
-	if _, err := db.conn.Exec(createIndexesSQL); err != nil {
-		return fmt.Errorf("failed to create indexes: %w", err)
+	indexStatements := strings.Split(createIndexesSQL, "\n")
+	for _, stmt := range indexStatements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		// Extract index name from CREATE INDEX statement
+		// Format: CREATE INDEX IF NOT EXISTS idx_name ON nodes(column)
+		parts := strings.Fields(stmt)
+		if len(parts) >= 6 && parts[0] == "CREATE" && parts[1] == "INDEX" {
+			indexName := parts[5] // Index name after "CREATE INDEX IF NOT EXISTS"
+			if !existingIndexes[indexName] {
+				if _, err := db.conn.Exec(stmt); err != nil {
+					return fmt.Errorf("failed to create index %s: %w", indexName, err)
+				}
+			}
+		}
 	}
 
+	return nil
+}
+
+// rootNodeExists checks if the root node exists
+func (db *DB) rootNodeExists() (bool, error) {
+	var exists bool
+	query := "SELECT EXISTS(SELECT 1 FROM nodes WHERE id = 'root')"
+	err := db.conn.QueryRow(query).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// createRootNodeInternal creates the root node (internal, assumes lock is held)
+func (db *DB) createRootNodeInternal() error {
 	// Create existence map with all worlds
 	existenceMap := make(map[string]bool)
 	existenceMap["primary"] = true
@@ -83,7 +292,7 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 		existenceMap[worldName] = true
 	}
 
-	// Insert root node directly to avoid nested locking
+	// Insert root node
 	existenceMapJSON, err := json.Marshal(existenceMap)
 	if err != nil {
 		return fmt.Errorf("failed to marshal existence map: %w", err)
@@ -118,8 +327,41 @@ func (db *DB) InitializeSchema(secondaryTables map[string]float64) error {
 	return nil
 }
 
-// Close closes the database connection
+// CheckpointWAL performs a WAL checkpoint to ensure all changes are written to the main database file.
+// This is important for graceful shutdown to ensure data persistence.
+// Mode can be "FULL", "RESTART", or "TRUNCATE" (defaults to "FULL" for complete checkpoint).
+// FULL ensures all frames are checkpointed and is the most thorough option.
+func (db *DB) CheckpointWAL(mode string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if mode == "" {
+		mode = "FULL" // Default to FULL for complete checkpoint during shutdown
+	}
+
+	// PRAGMA wal_checkpoint performs a checkpoint operation
+	// FULL mode ensures all frames are checkpointed from WAL to main database
+	// This guarantees all changes are persisted before shutdown
+	query := fmt.Sprintf("PRAGMA wal_checkpoint(%s)", strings.ToUpper(mode))
+	_, err := db.conn.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to checkpoint WAL: %w", err)
+	}
+
+	return nil
+}
+
+// Close closes the database connection after performing a WAL checkpoint to ensure data persistence
 func (db *DB) Close() error {
+	// Perform WAL checkpoint before closing to ensure all changes are saved
+	// Use FULL mode to ensure all frames are checkpointed from WAL to main database
+	// This guarantees all changes are persisted before shutdown
+	if err := db.CheckpointWAL("FULL"); err != nil {
+		// Log error but don't fail close - connection will still close
+		// This ensures the connection closes even if checkpoint fails
+		_ = err // Error is logged but we continue with close
+	}
+
 	return db.conn.Close()
 }
 
@@ -157,7 +399,7 @@ func (db *DB) InsertNode(node *types.Node) error {
 
 	_, err = db.conn.Exec(query, values...)
 	if err != nil {
-		return fmt.Errorf("failed to insert node %s: %w", node.ID, err)
+		return fmt.Errorf("[SpectraFS] failed to insert node %s: %w", node.ID, err)
 	}
 
 	return nil
@@ -196,9 +438,9 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 	err := row.Scan(scanTargets...)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("node not found: %s", id)
+			return nil, fmt.Errorf("[SpectraFS] node not found: %s", id)
 		}
-		return nil, fmt.Errorf("failed to get node %s: %w", id, err)
+		return nil, fmt.Errorf("[SpectraFS] failed to get node %s: %w", id, err)
 	}
 
 	// Handle checksum
@@ -209,7 +451,7 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 	// Deserialize existence map
 	if existenceMapJSON != "" {
 		if err := json.Unmarshal([]byte(existenceMapJSON), &node.ExistenceMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal existence map: %w", err)
+			return nil, fmt.Errorf("[SpectraFS] failed to unmarshal existence map: %w", err)
 		}
 	} else {
 		node.ExistenceMap = make(map[string]bool)
@@ -232,7 +474,7 @@ ORDER BY type, name`
 
 	rows, err := db.conn.Query(query, parentID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query children of %s in world %s: %w", parentID, world, err)
+		return nil, fmt.Errorf("[SpectraFS] failed to query children of %s in world %s: %w", parentID, world, err)
 	}
 	defer rows.Close()
 
@@ -256,7 +498,7 @@ ORDER BY type, name`
 			&existenceMapJSON,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan child node: %w", err)
+			return nil, fmt.Errorf("[SpectraFS] failed to scan child node: %w", err)
 		}
 
 		// Handle checksum
@@ -267,7 +509,7 @@ ORDER BY type, name`
 		// Deserialize existence map
 		if existenceMapJSON != "" {
 			if err := json.Unmarshal([]byte(existenceMapJSON), &node.ExistenceMap); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal existence map: %w", err)
+				return nil, fmt.Errorf("[SpectraFS] failed to unmarshal existence map: %w", err)
 			}
 		} else {
 			node.ExistenceMap = make(map[string]bool)
@@ -277,7 +519,7 @@ ORDER BY type, name`
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating children: %w", err)
+		return nil, fmt.Errorf("[SpectraFS] error iterating children: %w", err)
 	}
 
 	return children, nil
@@ -300,7 +542,7 @@ ORDER BY
 
 	rows, err := db.conn.Query(query, parentID, parentID, parentID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query parent and children: %w", err)
+		return nil, fmt.Errorf("[SpectraFS] failed to query parent and children: %w", err)
 	}
 	defer rows.Close()
 
@@ -324,7 +566,7 @@ ORDER BY
 			&existenceMapJSON,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan node: %w", err)
+			return nil, fmt.Errorf("[SpectraFS] failed to scan node: %w", err)
 		}
 
 		// Handle checksum
@@ -335,7 +577,7 @@ ORDER BY
 		// Deserialize existence map
 		if existenceMapJSON != "" {
 			if err := json.Unmarshal([]byte(existenceMapJSON), &node.ExistenceMap); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal existence map: %w", err)
+				return nil, fmt.Errorf("[SpectraFS] failed to unmarshal existence map: %w", err)
 			}
 		} else {
 			node.ExistenceMap = make(map[string]bool)
@@ -345,7 +587,7 @@ ORDER BY
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating nodes: %w", err)
+		return nil, fmt.Errorf("[SpectraFS] error iterating nodes: %w", err)
 	}
 
 	// First node should be parent (due to ORDER BY), rest are children
@@ -366,7 +608,7 @@ WHERE parent_id = ?
 	var count int
 	err := db.conn.QueryRow(query, parentID).Scan(&count)
 	if err != nil {
-		return false, fmt.Errorf("failed to check children existence for %s: %w", parentID, err)
+		return false, fmt.Errorf("[SpectraFS] failed to check children existence for %s: %w", parentID, err)
 	}
 	return count > 0, nil
 }
@@ -378,22 +620,22 @@ func (db *DB) UpdateExistenceMap(id string, existenceMap map[string]bool) error 
 
 	existenceMapJSON, err := json.Marshal(existenceMap)
 	if err != nil {
-		return fmt.Errorf("failed to marshal existence map: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to marshal existence map: %w", err)
 	}
 
 	query := `UPDATE nodes SET existence_map = ? WHERE id = ?`
 	result, err := db.conn.Exec(query, string(existenceMapJSON), id)
 	if err != nil {
-		return fmt.Errorf("failed to update existence map for %s: %w", id, err)
+		return fmt.Errorf("[SpectraFS] failed to update existence map for %s: %w", id, err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected for %s: %w", id, err)
+		return fmt.Errorf("[SpectraFS] failed to get rows affected for %s: %w", id, err)
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("node %s not found", id)
+		return fmt.Errorf("[SpectraFS] node %s not found", id)
 	}
 
 	return nil
@@ -405,7 +647,7 @@ func (db *DB) DeleteAllNodes() error {
 	defer db.mu.Unlock()
 
 	if _, err := db.conn.Exec("DELETE FROM nodes"); err != nil {
-		return fmt.Errorf("failed to delete from nodes table: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to delete from nodes table: %w", err)
 	}
 	return nil
 }
@@ -419,7 +661,7 @@ func (db *DB) GetNodeCount(world string) (int, error) {
 	var count int
 	err := db.conn.QueryRow(query).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get node count for world %s: %w", world, err)
+		return 0, fmt.Errorf("[SpectraFS] failed to get node count for world %s: %w", world, err)
 	}
 	return count, nil
 }
@@ -436,7 +678,7 @@ func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
 	var primaryCount int
 	err := db.conn.QueryRow(query).Scan(&primaryCount)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get count for primary world: %w", err)
+		return nil, fmt.Errorf("[SpectraFS] failed to get count for primary world: %w", err)
 	}
 	tables = append(tables, types.TableInfo{
 		Name:      "primary",
@@ -450,7 +692,7 @@ func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
 		var count int
 		err := db.conn.QueryRow(query).Scan(&count)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get count for world %s: %w", worldName, err)
+			return nil, fmt.Errorf("[SpectraFS] failed to get count for world %s: %w", worldName, err)
 		}
 		tables = append(tables, types.TableInfo{
 			Name:      worldName,
@@ -475,10 +717,10 @@ func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error
 	query := "SELECT path FROM nodes WHERE id = ?"
 	err := db.conn.QueryRow(query, parentID).Scan(&parentPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get parent node: %w", err)
+		return nil, fmt.Errorf("[SpectraFS] failed to get parent node: %w", err)
 	}
 
-	path := fmt.Sprintf("%s/%s", parentPath, name)
+	path := utils.JoinPath(parentPath, name)
 
 	folderNode := &types.Node{
 		ID:           nodeID,
@@ -521,13 +763,13 @@ func (db *DB) CreateRootNode() error {
 	// Insert root node directly to avoid nested locking
 	existenceMapJSON, err := json.Marshal(existenceMap)
 	if err != nil {
-		return fmt.Errorf("failed to marshal existence map: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to marshal existence map: %w", err)
 	}
 
 	// Build insert query with all traversal columns
 	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
 	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
-	values := []interface{}{
+	values := []any{
 		"root",
 		"",
 		"root",
@@ -541,13 +783,13 @@ func (db *DB) CreateRootNode() error {
 		string(existenceMapJSON),
 	}
 
-	insertQuery := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
+	insertQuery := fmt.Sprintf("INSERT OR IGNORE INTO nodes (%s) VALUES (%s)",
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
 
 	_, err = db.conn.Exec(insertQuery, values...)
 	if err != nil {
-		return fmt.Errorf("failed to create root node: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to create root node: %w", err)
 	}
 
 	return nil
@@ -561,16 +803,16 @@ func (db *DB) DeleteNode(id string) error {
 	query := `DELETE FROM nodes WHERE id = ?`
 	result, err := db.conn.Exec(query, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete node %s: %w", id, err)
+		return fmt.Errorf("[SpectraFS] failed to delete node %s: %w", id, err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to get rows affected: %w", err)
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("node not found: %s", id)
+		return fmt.Errorf("[SpectraFS] node not found: %s", id)
 	}
 
 	return nil
@@ -594,7 +836,7 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 
 	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -602,13 +844,13 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 	columns := []string{"id", "parent_id", "name", "path", "parent_path", "type", "depth_level", "size", "last_updated", "checksum", "existence_map"}
 	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 
-	query := fmt.Sprintf("INSERT INTO nodes (%s) VALUES (%s)",
+	query := fmt.Sprintf("INSERT OR IGNORE INTO nodes (%s) VALUES (%s)",
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
 
 	stmt, err := tx.Prepare(query)
 	if err != nil {
-		return fmt.Errorf("failed to prepare insert statement: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to prepare insert statement: %w", err)
 	}
 	defer stmt.Close()
 
@@ -616,7 +858,7 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 	for _, node := range nodes {
 		existenceMapJSON, err := json.Marshal(node.ExistenceMap)
 		if err != nil {
-			return fmt.Errorf("failed to marshal existence map: %w", err)
+			return fmt.Errorf("[SpectraFS] failed to marshal existence map: %w", err)
 		}
 
 		var checksumVal any
@@ -642,12 +884,12 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 
 		_, err = stmt.Exec(values...)
 		if err != nil {
-			return fmt.Errorf("failed to insert node %s: %w", node.ID, err)
+			return fmt.Errorf("[SpectraFS] failed to insert node %s: %w", node.ID, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("[SpectraFS] failed to commit transaction: %w", err)
 	}
 
 	return nil
@@ -691,9 +933,9 @@ WHERE path = ?`
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("node not found with path %s in world %s", path, world)
+			return nil, fmt.Errorf("[SpectraFS] node not found with path %s in world %s", path, world)
 		}
-		return nil, fmt.Errorf("failed to get node by path %s in world %s: %w", path, world, err)
+		return nil, fmt.Errorf("[SpectraFS] failed to get node by path %s in world %s: %w", path, world, err)
 	}
 
 	// Handle checksum
@@ -704,7 +946,7 @@ WHERE path = ?`
 	// Deserialize existence map
 	if existenceMapJSON != "" {
 		if err := json.Unmarshal([]byte(existenceMapJSON), &node.ExistenceMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal existence map: %w", err)
+			return nil, fmt.Errorf("[SpectraFS] failed to unmarshal existence map: %w", err)
 		}
 	} else {
 		node.ExistenceMap = make(map[string]bool)

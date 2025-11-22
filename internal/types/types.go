@@ -66,9 +66,9 @@ type ListResult struct {
 
 // APIResponse represents a generic API response
 type APIResponse struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message,omitempty"`
-	Data    interface{} `json:"data,omitempty"`
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Data    any    `json:"data,omitempty"`
 }
 
 // TableInfo represents information about a database table

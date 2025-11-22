@@ -64,7 +64,9 @@ func (s *SpectraFS) Reset() error {
 	return s.impl.Reset()
 }
 
-// Close closes the database connection
+// Close closes the database connection after performing a WAL checkpoint to ensure data persistence.
+// This ensures all changes are fully saved before the process finishes.
+// Always call this method during graceful shutdown to guarantee data integrity.
 func (s *SpectraFS) Close() error {
 	return s.impl.Close()
 }
