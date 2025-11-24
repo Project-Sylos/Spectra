@@ -6,7 +6,7 @@
 
 ## Overview
 
-Spectra behaves like a mock filesystem. Instead of relying on actual disk I/O, it **procedurally generates** folders and files based on configuration parameters (min/max depth, file counts, folder counts, etc.). Each generated node is **persisted to an embedded SQLite database** with multi-table support, enabling reproducible state across test runs.
+Spectra behaves like a mock filesystem. Instead of relying on actual disk I/O, it **procedurally generates** folders and files based on configuration parameters (min/max depth, file counts, folder counts, etc.). Each generated node is **persisted to an embedded BoltDB database** with multi-world support, enabling reproducible state across test runs.
 
 This design allows engineers to stress-test migration engines (such as Sylos) without interacting with real file systems or cloud APIs.
 
@@ -16,12 +16,12 @@ This design allows engineers to stress-test migration engines (such as Sylos) wi
 
 * **Procedural Generation:** Randomly creates folder and file hierarchies using a seeded RNG for reproducibility.
 * **Deterministic Mode:** When given a seed, the same folder structure is regenerated identically across runs.
-* **Unified Single-Table Architecture:** One table with world-based existence tracking for optimal performance.
+* **Unified Single-Bucket Architecture:** One bucket with world-based existence tracking for optimal performance.
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
 * **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone.
-* **SQLite Persistence:** Each node is stored in a local SQLite database with metadata for path, type, size, timestamps, etc.
+* **BoltDB Persistence:** Each node is stored in a local BoltDB key-value database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out, file size ranges, and naming schemes through the config file or API.
-* **Instant Cleanup:** Simple teardown between tests — delete the SQLite database file and regenerate.
+* **Instant Cleanup:** Simple teardown between tests — delete the BoltDB database file and regenerate.
 * **Plain UUID IDs:** Simple unique identifiers without prefixes.
 * **Optimized Queries:** Vectorized queries reduce database round trips by 3-4x.
 
@@ -29,14 +29,14 @@ This design allows engineers to stress-test migration engines (such as Sylos) wi
 
 ## Architecture
 
-### Single-Table Design
+### Single-Bucket Design
 
-Spectra uses an optimized single-table architecture for maximum performance:
+Spectra uses an optimized single-bucket architecture for maximum performance:
 
-- **Unified `nodes` Table**: All nodes stored in one table with plain UUID IDs
-- **Existence Map**: JSON column tracking which "worlds" (primary, s1, s2, etc.) each node exists in
-- **Dynamic Traversal Columns**: Per-world traversal status columns (`traversal_primary`, `traversal_s1`, etc.)
-- **World-Based Filtering**: Queries filter nodes by world using JSON operations on `existence_map`
+- **Unified `nodes` Bucket**: All nodes stored in one bucket with plain UUID IDs as keys
+- **Existence Map**: JSON field tracking which "worlds" (primary, s1, s2, etc.) each node exists in
+- **Index Buckets**: Separate buckets for efficient lookups by parent_id, path, and parent_path
+- **World-Based Filtering**: Filtering done in Go after deserializing nodes, checking `existence_map` field
 
 ### Probability-Based Generation
 
@@ -58,13 +58,13 @@ The system filters nodes by "world" context:
 
 ## Tech Stack
 
-| Component                                               | Purpose                                                |
-| ------------------------------------------------------- | ------------------------------------------------------ |
-| **Go (Golang)**                                         | Core implementation language                           |
-| **SQLite**                                              | Lightweight embedded SQL database for node persistence |
-| **Chi Router**                                          | HTTP router for RESTful API endpoints                 |
-| **Google UUID**                                         | UUID generation for consistent node identification     |
-| **Go's `math/rand`**                                    | Deterministic random generation with seeding           |
+| Component                                                        | Purpose                                                         |
+| ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Go (Golang)**                                                  | Core implementation language                                    |
+| **BoltDB**                                                       | Lightweight embedded key-value database for node persistence    |
+| **Chi Router**                                                   | HTTP router for RESTful API endpoints                           |
+| **Google UUID**                                                  | UUID generation for consistent node identification              |
+| **Go's `math/rand`**                                             | Deterministic random generation with seeding                    |
 | **Go standard library (`os`, `path/filepath`, `time`, `io/fs`)** | Utility functions, path normalization, and filesystem interface |
 
 ---
@@ -102,7 +102,7 @@ Spectra/
 
 ### Node Generation
 
-Spectra represents all nodes as entries in a unified SQLite table:
+Spectra represents all nodes as entries in a unified BoltDB key-value store:
 
 | Column               | Type      | Description                                                |
 | -------------------- | --------- | --------------------------------------------------------   |
@@ -152,7 +152,7 @@ Spectra will generate a reproducible tree up to 4 levels deep, where each folder
 ### RESTful Endpoints
 
 #### Folder Operations
-- `POST /api/v1/folder/list` - List children with table detection
+- `POST /api/v1/folder/list` - List children with world detection
 - `POST /api/v1/folder/create` - Create new folder
 - `GET /api/v1/folder/{id}` - Get folder metadata
 
@@ -166,10 +166,10 @@ Spectra will generate a reproducible tree up to 4 levels deep, where each folder
 - `DELETE /api/v1/node/{id}` - Delete node
 
 #### System Operations
-- `POST /api/v1/reset` - Reset all tables
+- `POST /api/v1/reset` - Reset all nodes
 - `GET /api/v1/config` - Get current configuration
-- `GET /api/v1/tables` - Get table information
-- `GET /api/v1/tables/{tableName}/count` - Get table row count
+- `GET /api/v1/tables` - Get world information (API uses "tables" for compatibility)
+- `GET /api/v1/tables/{tableName}/count` - Get node count for specific world
 
 ### SDK Interface
 
@@ -185,8 +185,8 @@ type SpectraFS struct {
     // System operations
     Reset() error
     GetConfig() *Config
-    GetTableInfo() ([]TableInfo, error)
-    GetNodeCount(tableName string) (int, error)
+    GetTableInfo() ([]TableInfo, error)  // Returns world information
+    GetNodeCount(tableName string) (int, error)  // Counts nodes in specific world
 }
 ```
 
@@ -324,7 +324,7 @@ curl -X POST http://localhost:8086/api/v1/file/upload \
 
 ## Development Setup
 
-Spectra relies on Go's SQLite bindings, so setup is lightweight:
+Spectra uses BoltDB, a pure Go embedded database, so setup is lightweight:
 
 1. Install Go 1.24.2 or later.
 2. Clone the repository and run `go mod tidy` to pull dependencies.
@@ -346,8 +346,8 @@ Spectra provides two main command-line applications:
 ### SDK Demo (`main.go`)
 A demonstration application that showcases the Spectra SDK functionality:
 - Loads configuration and initializes SpectraFS
-- Demonstrates table information and node generation
-- Shows multi-table operations and secondary table counts
+- Demonstrates world information and node generation
+- Shows multi-world operations and secondary world counts
 - Performs a complete reset operation
 - Perfect for testing and understanding the SDK
 
@@ -379,7 +379,7 @@ The configuration file supports three main sections:
 
 - **`seed`**: Controls procedural generation parameters
 - **`api`**: Configures HTTP server settings
-- **`secondary_tables`**: Defines secondary table probabilities
+- **`secondary_tables`**: Defines secondary world probabilities (config key name kept for compatibility)
 
 See `configs/default.json` for a complete example.
 

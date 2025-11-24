@@ -2,38 +2,62 @@ package db
 
 import (
 	"fmt"
-	"strings"
+
+	"go.etcd.io/bbolt"
 )
 
-// BuildNodesTableSQL generates the CREATE TABLE statement with all traversal columns
-func BuildNodesTableSQL(secondaryTables map[string]float64) string {
-	// Base columns
-	columns := []string{
-		"id VARCHAR NOT NULL UNIQUE",
-		"parent_id VARCHAR NOT NULL",
-		"name VARCHAR NOT NULL",
-		"path VARCHAR NOT NULL",
-		"parent_path VARCHAR NOT NULL",
-		"type VARCHAR NOT NULL CHECK (type IN ('folder', 'file'))",
-		"depth_level INTEGER NOT NULL",
-		"size BIGINT NOT NULL",
-		"last_updated TIMESTAMP NOT NULL",
-		"checksum VARCHAR",
-		"existence_map TEXT NOT NULL DEFAULT '{\"primary\": true}'",
-	}
+// Bucket names for BoltDB storage
+const (
+	bucketNodes           = "nodes"
+	bucketIndexParentID   = "index_parent_id"
+	bucketIndexPath       = "index_path"
+	bucketIndexParentPath = "index_parent_path"
+)
 
-	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS nodes (\n    %s\n);", strings.Join(columns, ",\n    "))
+// InitializeBuckets creates all required buckets in the BoltDB database
+// This replaces the SQL table creation logic
+func InitializeBuckets(db *bbolt.DB) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		// Create main nodes bucket
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketNodes)); err != nil {
+			return fmt.Errorf("failed to create nodes bucket: %w", err)
+		}
+
+		// Create index buckets
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIndexParentID)); err != nil {
+			return fmt.Errorf("failed to create index_parent_id bucket: %w", err)
+		}
+
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIndexPath)); err != nil {
+			return fmt.Errorf("failed to create index_path bucket: %w", err)
+		}
+
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIndexParentPath)); err != nil {
+			return fmt.Errorf("failed to create index_parent_path bucket: %w", err)
+		}
+
+		return nil
+	})
 }
 
-// BuildIndexesSQL generates all index creation statements
-func BuildIndexesSQL(secondaryTables map[string]float64) string {
-	indexes := []string{
-		"CREATE INDEX IF NOT EXISTS idx_parent_id ON nodes(parent_id);",
-		"CREATE INDEX IF NOT EXISTS idx_type ON nodes(type);",
-		"CREATE INDEX IF NOT EXISTS idx_depth_level ON nodes(depth_level);",
-		"CREATE INDEX IF NOT EXISTS idx_path ON nodes(path);",
-		"CREATE INDEX IF NOT EXISTS idx_parent_path ON nodes(parent_path);",
-	}
+// VerifyBucketsExist checks if all required buckets exist in the database
+// This replaces the SQL table existence checks
+func VerifyBucketsExist(db *bbolt.DB) error {
+	return db.View(func(tx *bbolt.Tx) error {
+		requiredBuckets := []string{
+			bucketNodes,
+			bucketIndexParentID,
+			bucketIndexPath,
+			bucketIndexParentPath,
+		}
 
-	return strings.Join(indexes, "\n")
+		for _, bucketName := range requiredBuckets {
+			bucket := tx.Bucket([]byte(bucketName))
+			if bucket == nil {
+				return fmt.Errorf("required bucket %s does not exist", bucketName)
+			}
+		}
+
+		return nil
+	})
 }

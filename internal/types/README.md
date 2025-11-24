@@ -95,8 +95,8 @@ type ListResult struct {
 
 ## Helper Functions
 
-### Table Management
-- `GetTableName(world)` - Always returns "nodes" (single table architecture)
+### World Management
+- `GetTableName(world)` - Always returns "nodes" (single bucket architecture, kept for API compatibility)
 
 ## Usage
 
@@ -104,7 +104,7 @@ The types package is used throughout the application to ensure type safety and c
 
 ## JSON Tags
 
-All types include JSON tags for API serialization and database tags for SQLite operations. This ensures consistent data representation across all layers.
+All types include JSON tags for API serialization and database tags for BoltDB operations. This ensures consistent data representation across all layers.
 
 ## Validation
 

@@ -22,7 +22,7 @@ spectrafs/
 
 ## Key Features
 
-### Optimized Single-Table Operations
+### Optimized Single-Bucket Operations
 - Vectorized queries fetch parent + children in one query
 - World-based filtering via `ExistenceMap`
 - Conditional traversal updates (skip already-successful nodes)
@@ -55,7 +55,7 @@ All operations use interface-based request structs for flexible lookup (by ID or
 - World-aware filtering based on request context (defaults to "primary")
 
 ### System Operations
-- `Reset()` - Clear nodes table and recreate single root
+- `Reset()` - Clear nodes bucket and recreate single root
 - `GetConfig()` - Get current configuration
 - `GetTableInfo()` - Get world metadata
 - `GetNodeCount(world)` - Count nodes in specific world
@@ -69,7 +69,7 @@ All operations use interface-based request structs for flexible lookup (by ID or
 
 ## ListChildren Logic (Optimized)
 
-The core `ListChildren` operation is dramatically simplified with the single-table architecture:
+The core `ListChildren` operation is dramatically simplified with the single-bucket architecture:
 
 1. **Single Vectorized Query**: Fetch parent + children in ONE query using `GetParentAndChildren(parentID, world)`
 2. **Existence Check**: Verify parent exists in requested world

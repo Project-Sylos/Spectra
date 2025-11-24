@@ -40,10 +40,10 @@ type SpectraFS struct {
 - `CheckChildrenExist(parentID)` - Check if children exist
 
 #### System Operations
-- `Reset()` - Clear all tables and recreate root
+- `Reset()` - Clear all nodes and recreate root
 - `GetConfig()` - Get current configuration
-- `GetTableInfo()` - Get table metadata
-- `GetNodeCount(tableName)` - Count nodes in specific table
+- `GetTableInfo()` - Get world metadata
+- `GetNodeCount(tableName)` - Count nodes in specific world
 
 #### File Data Operations
 - `GetFileData(id)` - Get file data and checksum

@@ -29,8 +29,8 @@ type APIConfig struct {
 	Port int    `json:"port"`
 }
 
-// Node represents a filesystem node (file or folder) in the SQLite table
-// Unified single-table design with existence tracking across worlds
+// Node represents a filesystem node (file or folder) in the BoltDB database
+// Unified single-bucket design with existence tracking across worlds
 type Node struct {
 	ID           string          `json:"id" db:"id"`                       // UUID identifier
 	ParentID     string          `json:"parent_id" db:"parent_id"`         // UUID parent reference

@@ -12,7 +12,6 @@ import (
 
 	"github.com/Project-Sylos/Spectra/internal/api"
 	"github.com/Project-Sylos/Spectra/sdk"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
 )
 
 func main() {

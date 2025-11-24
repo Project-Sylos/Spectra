@@ -41,7 +41,7 @@ Provides common functionality for all handlers:
 - **HealthHandler**: Health check endpoints
 - **ItemHandler**: Item operations (list, create folder, upload file, get file data)
 - **NodeHandler**: Generic node operations (get, delete)
-- **SystemHandler**: System operations (reset, config, tables)
+- **SystemHandler**: System operations (reset, config, world information)
 
 ## Middleware
 
@@ -78,7 +78,7 @@ All API routes are prefixed with `/api/v1/` and organized by domain:
 - `/api/v1/node/*` - Node operations (get, delete)
 - `/api/v1/reset` - System reset
 - `/api/v1/config` - Configuration retrieval
-- `/api/v1/tables/*` - Table information
+- `/api/v1/tables/*` - World information (kept as "tables" for API compatibility)
 
 ## Usage
 
