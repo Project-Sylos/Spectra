@@ -91,6 +91,11 @@ func (s *SpectraFS) GetSecondaryTables() []string {
 	return s.impl.GetSecondaryTables()
 }
 
+// GetStats retrieves the current filesystem statistics
+func (s *SpectraFS) GetStats() (*Stats, error) {
+	return s.impl.GetStats()
+}
+
 // DeleteNode deletes a node using either ID or Path+World
 func (s *SpectraFS) DeleteNode(req *models.DeleteNodeRequest) error {
 	return s.impl.DeleteNode(req)
@@ -104,6 +109,7 @@ type (
 	File        = types.File
 	ListResult  = types.ListResult
 	TableInfo   = types.TableInfo
+	Stats       = types.Stats
 	APIResponse = types.APIResponse
 )
 

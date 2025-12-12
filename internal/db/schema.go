@@ -12,6 +12,7 @@ const (
 	bucketIndexParentID   = "index_parent_id"
 	bucketIndexPath       = "index_path"
 	bucketIndexParentPath = "index_parent_path"
+	bucketStats           = "stats"
 )
 
 // InitializeBuckets creates all required buckets in the BoltDB database
@@ -36,6 +37,11 @@ func InitializeBuckets(db *bbolt.DB) error {
 			return fmt.Errorf("failed to create index_parent_path bucket: %w", err)
 		}
 
+		// Create stats bucket
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketStats)); err != nil {
+			return fmt.Errorf("failed to create stats bucket: %w", err)
+		}
+
 		return nil
 	})
 }
@@ -49,6 +55,7 @@ func VerifyBucketsExist(db *bbolt.DB) error {
 			bucketIndexParentID,
 			bucketIndexPath,
 			bucketIndexParentPath,
+			bucketStats,
 		}
 
 		for _, bucketName := range requiredBuckets {

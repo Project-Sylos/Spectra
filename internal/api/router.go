@@ -61,6 +61,7 @@ func (r *Router) SetupRoutes() *chi.Mux {
 		// System operations
 		api.Post("/reset", systemHandler.Reset)
 		api.Get("/config", systemHandler.GetConfig)
+		api.Get("/stats", systemHandler.GetStats)
 		api.Get("/tables", systemHandler.GetTables)
 		api.Get("/tables/{tableName}/count", systemHandler.GetTableCount)
 	})

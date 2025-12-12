@@ -78,6 +78,14 @@ type TableInfo struct {
 	TableType string `json:"table_type"` // "primary" or "secondary"
 }
 
+// Stats represents filesystem statistics
+type Stats struct {
+	FileCount      int64            `json:"file_count"`      // Total number of files
+	FolderCount    int64            `json:"folder_count"`    // Total number of folders
+	TotalFileSize  int64            `json:"total_file_size"` // Total size of all files combined
+	SecondaryNodes map[string]int64 `json:"secondary_nodes"` // Node counts broken down by world (excluding primary)
+}
+
 // NodeType constants
 const (
 	NodeTypeFolder = "folder"

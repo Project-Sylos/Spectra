@@ -90,6 +90,11 @@ func (db *DB) VerifyAndInitialize(dbFileExists bool, secondaryTables map[string]
 		}
 	}
 
+	// D) Initialize stats if needed
+	if err := db.initializeStats(); err != nil {
+		return fmt.Errorf("failed to initialize stats: %w", err)
+	}
+
 	return nil
 }
 
@@ -197,7 +202,7 @@ func (db *DB) InsertNode(node *types.Node) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	return db.db.Update(func(tx *bbolt.Tx) error {
+	err := db.db.Update(func(tx *bbolt.Tx) error {
 		// Serialize node to JSON
 		nodeJSON, err := json.Marshal(node)
 		if err != nil {
@@ -245,6 +250,17 @@ func (db *DB) InsertNode(node *types.Node) error {
 
 		return nil
 	})
+
+	// Update stats after successful insertion
+	if err == nil {
+		if err := db.updateStatsForNode(node, true); err != nil {
+			// Log error but don't fail the insertion
+			// Stats update failure shouldn't prevent node insertion
+			_ = err
+		}
+	}
+
+	return err
 }
 
 // GetNodeByID retrieves a node by its ID from the nodes bucket
@@ -525,7 +541,7 @@ func (db *DB) DeleteAllNodes() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	return db.db.Update(func(tx *bbolt.Tx) error {
+	err := db.db.Update(func(tx *bbolt.Tx) error {
 		// Delete all nodes from nodes bucket
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket != nil {
@@ -553,6 +569,17 @@ func (db *DB) DeleteAllNodes() error {
 
 		return nil
 	})
+
+	// Reset stats after successful deletion
+	if err == nil {
+		if err := db.resetStats(); err != nil {
+			// Log error but don't fail the reset
+			// Stats update failure shouldn't prevent reset
+			_ = err
+		}
+	}
+
+	return err
 }
 
 // GetNodeCount returns the total number of nodes in a specific world
@@ -790,7 +817,8 @@ func (db *DB) DeleteNode(id string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	return db.db.Update(func(tx *bbolt.Tx) error {
+	var node types.Node
+	err := db.db.Update(func(tx *bbolt.Tx) error {
 		// First, get the node to retrieve its path and parent info for index cleanup
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket == nil {
@@ -802,7 +830,6 @@ func (db *DB) DeleteNode(id string) error {
 			return fmt.Errorf("[SpectraFS] node not found: %s", id)
 		}
 
-		var node types.Node
 		if err := json.Unmarshal(nodeData, &node); err != nil {
 			return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", id, err)
 		}
@@ -840,11 +867,243 @@ func (db *DB) DeleteNode(id string) error {
 
 		return nil
 	})
+
+	// Update stats after successful deletion
+	if err == nil {
+		if err := db.updateStatsForNode(&node, false); err != nil {
+			// Log error but don't fail the deletion
+			// Stats update failure shouldn't prevent node deletion
+			_ = err
+		}
+	}
+
+	return err
 }
 
 // GetSecondaryTables returns the list of secondary world names
 func (db *DB) GetSecondaryTables() []string {
 	return db.secondaryTables
+}
+
+// initializeStats initializes the stats bucket with zero values
+func (db *DB) initializeStats() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	return db.db.Update(func(tx *bbolt.Tx) error {
+		statsBucket := tx.Bucket([]byte(bucketStats))
+		if statsBucket == nil {
+			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
+		}
+
+		// Check if stats already exist
+		statsData := statsBucket.Get([]byte("global"))
+		if statsData != nil {
+			// Stats already initialized
+			return nil
+		}
+
+		// Initialize with zero values
+		stats := &types.Stats{
+			FileCount:      0,
+			FolderCount:    0,
+			TotalFileSize:  0,
+			SecondaryNodes: make(map[string]int64),
+		}
+
+		// Initialize secondary nodes map for each secondary world
+		for _, worldName := range db.secondaryTables {
+			stats.SecondaryNodes[worldName] = 0
+		}
+
+		statsJSON, err := json.Marshal(stats)
+		if err != nil {
+			return fmt.Errorf("[SpectraFS] failed to marshal stats: %w", err)
+		}
+
+		if err := statsBucket.Put([]byte("global"), statsJSON); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to initialize stats: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// updateStatsForNode increments stats for a newly inserted node
+// NOTE: This function assumes the caller already holds db.mu lock
+func (db *DB) updateStatsForNode(node *types.Node, increment bool) error {
+	return db.db.Update(func(tx *bbolt.Tx) error {
+		statsBucket := tx.Bucket([]byte(bucketStats))
+		if statsBucket == nil {
+			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
+		}
+
+		// Get current stats
+		statsData := statsBucket.Get([]byte("global"))
+		if statsData == nil {
+			// Stats not initialized, initialize them
+			stats := &types.Stats{
+				FileCount:      0,
+				FolderCount:    0,
+				TotalFileSize:  0,
+				SecondaryNodes: make(map[string]int64),
+			}
+			for _, worldName := range db.secondaryTables {
+				stats.SecondaryNodes[worldName] = 0
+			}
+			statsData, _ = json.Marshal(stats)
+		}
+
+		var stats types.Stats
+		if err := json.Unmarshal(statsData, &stats); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to unmarshal stats: %w", err)
+		}
+
+		// Ensure SecondaryNodes map is initialized
+		if stats.SecondaryNodes == nil {
+			stats.SecondaryNodes = make(map[string]int64)
+		}
+
+		// Update stats based on node type
+		delta := int64(1)
+		if !increment {
+			delta = -1
+		}
+
+		switch node.Type {
+		case types.NodeTypeFile:
+			stats.FileCount += delta
+			if increment {
+				stats.TotalFileSize += node.Size
+			} else {
+				stats.TotalFileSize -= node.Size
+				if stats.TotalFileSize < 0 {
+					stats.TotalFileSize = 0
+				}
+			}
+		case types.NodeTypeFolder:
+			stats.FolderCount += delta
+		}
+
+		// Update secondary node counts for each world
+		for worldName := range stats.SecondaryNodes {
+			if node.ExistenceMap[worldName] {
+				stats.SecondaryNodes[worldName] += delta
+				if stats.SecondaryNodes[worldName] < 0 {
+					stats.SecondaryNodes[worldName] = 0
+				}
+			}
+		}
+
+		// Ensure all secondary worlds are in the map
+		for _, worldName := range db.secondaryTables {
+			if _, exists := stats.SecondaryNodes[worldName]; !exists {
+				stats.SecondaryNodes[worldName] = 0
+			}
+		}
+
+		// Save updated stats
+		updatedStatsJSON, err := json.Marshal(stats)
+		if err != nil {
+			return fmt.Errorf("[SpectraFS] failed to marshal updated stats: %w", err)
+		}
+
+		if err := statsBucket.Put([]byte("global"), updatedStatsJSON); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to update stats: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// GetStats retrieves the current filesystem statistics
+func (db *DB) GetStats() (*types.Stats, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var stats *types.Stats
+	err := db.db.View(func(tx *bbolt.Tx) error {
+		statsBucket := tx.Bucket([]byte(bucketStats))
+		if statsBucket == nil {
+			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
+		}
+
+		statsData := statsBucket.Get([]byte("global"))
+		if statsData == nil {
+			// Stats not initialized, return zero stats
+			stats = &types.Stats{
+				FileCount:      0,
+				FolderCount:    0,
+				TotalFileSize:  0,
+				SecondaryNodes: make(map[string]int64),
+			}
+			// Initialize secondary nodes map
+			for _, worldName := range db.secondaryTables {
+				stats.SecondaryNodes[worldName] = 0
+			}
+			return nil
+		}
+
+		stats = &types.Stats{}
+		if err := json.Unmarshal(statsData, stats); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to unmarshal stats: %w", err)
+		}
+
+		// Ensure SecondaryNodes map is initialized
+		if stats.SecondaryNodes == nil {
+			stats.SecondaryNodes = make(map[string]int64)
+		}
+
+		// Ensure all secondary worlds are in the map
+		for _, worldName := range db.secondaryTables {
+			if _, exists := stats.SecondaryNodes[worldName]; !exists {
+				stats.SecondaryNodes[worldName] = 0
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+// resetStats resets all stats to zero
+// NOTE: This function assumes the caller already holds db.mu lock
+func (db *DB) resetStats() error {
+	return db.db.Update(func(tx *bbolt.Tx) error {
+		statsBucket := tx.Bucket([]byte(bucketStats))
+		if statsBucket == nil {
+			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
+		}
+
+		// Reset to zero values
+		stats := &types.Stats{
+			FileCount:      0,
+			FolderCount:    0,
+			TotalFileSize:  0,
+			SecondaryNodes: make(map[string]int64),
+		}
+
+		// Initialize secondary nodes map for each secondary world
+		for _, worldName := range db.secondaryTables {
+			stats.SecondaryNodes[worldName] = 0
+		}
+
+		statsJSON, err := json.Marshal(stats)
+		if err != nil {
+			return fmt.Errorf("[SpectraFS] failed to marshal stats: %w", err)
+		}
+
+		if err := statsBucket.Put([]byte("global"), statsJSON); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to reset stats: %w", err)
+		}
+
+		return nil
+	})
 }
 
 // Note: ParentInfo and GetParentInfo removed - replaced by GetParentAndChildren for better performance
@@ -858,7 +1117,10 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 		return nil
 	}
 
-	return db.db.Update(func(tx *bbolt.Tx) error {
+	// Track which nodes were actually inserted (not skipped)
+	insertedNodes := make([]*types.Node, 0, len(nodes))
+
+	err := db.db.Update(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket == nil {
 			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
@@ -914,10 +1176,26 @@ func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
 			if err := indexParentPath.Put([]byte(parentPathKey), []byte{}); err != nil {
 				return fmt.Errorf("[SpectraFS] failed to update parent_path index for node %s: %w", node.ID, err)
 			}
+
+			// Track this node as inserted
+			insertedNodes = append(insertedNodes, node)
 		}
 
 		return nil
 	})
+
+	// Update stats after successful bulk insertion
+	if err == nil {
+		for _, node := range insertedNodes {
+			if err := db.updateStatsForNode(node, true); err != nil {
+				// Log error but don't fail the bulk insertion
+				// Stats update failure shouldn't prevent node insertion
+				_ = err
+			}
+		}
+	}
+
+	return err
 }
 
 // GetNodeByPath retrieves a node by its path, optionally filtering by world

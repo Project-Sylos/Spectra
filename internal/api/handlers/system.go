@@ -69,3 +69,14 @@ func (h *SystemHandler) GetConfig(w http.ResponseWriter, req *http.Request) {
 	config := h.fs.GetConfig()
 	h.sendSuccess(w, "Config retrieved successfully", config)
 }
+
+// GetStats handles the get stats endpoint
+func (h *SystemHandler) GetStats(w http.ResponseWriter, req *http.Request) {
+	stats, err := h.fs.GetStats()
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))
+		return
+	}
+
+	h.sendSuccess(w, "Stats retrieved successfully", stats)
+}

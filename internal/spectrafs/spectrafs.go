@@ -410,6 +410,11 @@ func (s *SpectraFS) GetSecondaryTables() []string {
 	return s.db.GetSecondaryTables()
 }
 
+// GetStats retrieves the current filesystem statistics
+func (s *SpectraFS) GetStats() (*types.Stats, error) {
+	return s.db.GetStats()
+}
+
 // resolveNodeAndWorld resolves a node and world from a request using interfaces
 // Supports both NodeIdentifier (for ID or Path+World) and ParentIdentifier (for ParentID or ParentPath+World)
 // Returns the node and the world name (defaults to "primary" if not specified)
