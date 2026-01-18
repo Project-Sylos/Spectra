@@ -13,14 +13,17 @@ type Config struct {
 
 // SeedConfig represents the filesystem generation configuration
 type SeedConfig struct {
-	MaxDepth       int    `json:"max_depth"`
-	MinFolders     int    `json:"min_folders"`
-	MaxFolders     int    `json:"max_folders"`
-	MinFiles       int    `json:"min_files"`
-	MaxFiles       int    `json:"max_files"`
-	Seed           int64  `json:"seed"`
-	DBPath         string `json:"db_path"`
-	FileBinarySeed int64  `json:"file_binary_seed,omitempty"`
+	MaxDepth               int     `json:"max_depth"`
+	MaxFolders             int     `json:"max_folders"`
+	FolderBackoffFactor    float64 `json:"folder_backoff_factor"`
+	FolderDepthDecayFactor float64 `json:"folder_depth_decay_factor"`
+	MaxFiles               int     `json:"max_files"`
+	FileBackoffFactor      float64 `json:"file_backoff_factor"`
+	FileDepthDecayFactor   float64 `json:"file_depth_decay_factor"`
+	Seed                   int64   `json:"seed"`
+	DBPath                 string  `json:"db_path"`
+	FileBinarySeed         int64   `json:"file_binary_seed,omitempty"`
+	EnableCache            bool    `json:"enable_cache"`
 }
 
 // APIConfig represents the HTTP API configuration
@@ -43,6 +46,7 @@ type Node struct {
 	LastUpdated  time.Time       `json:"last_updated" db:"last_updated"`   // Synthetic timestamp
 	Checksum     *string         `json:"checksum" db:"checksum"`           // SHA256 checksum (NULL for folders)
 	ExistenceMap map[string]bool `json:"existence_map" db:"existence_map"` // JSON: {"primary": true, "s1": true, "s2": false}
+	ChildIDs     []string        `json:"child_ids" db:"child_ids"`         // Array of child node IDs (O(1) lookup)
 }
 
 // Folder represents a folder node

@@ -13,14 +13,17 @@ import (
 func DefaultConfig() types.Config {
 	return types.Config{
 		Seed: types.SeedConfig{
-			MaxDepth:       4,
-			MinFolders:     1,
-			MaxFolders:     3,
-			MinFiles:       2,
-			MaxFiles:       5,
-			Seed:           42,
-			DBPath:         "./spectra.db",
-			FileBinarySeed: 0,
+			MaxDepth:               4,
+			MaxFolders:             100,
+			FolderBackoffFactor:    0.5,
+			FolderDepthDecayFactor: 0.8,
+			MaxFiles:               100,
+			FileBackoffFactor:      0.5,
+			FileDepthDecayFactor:   0.85,
+			Seed:                   42,
+			DBPath:                 "./spectra.db",
+			FileBinarySeed:         0,
+			EnableCache:            false,
 		},
 		API: types.APIConfig{
 			Host: "localhost",
@@ -92,20 +95,30 @@ func Validate(cfg *types.Config) error {
 		return fmt.Errorf("max_depth must be at least 1, got %d", cfg.Seed.MaxDepth)
 	}
 
-	if cfg.Seed.MinFolders < 0 {
-		return fmt.Errorf("min_folders must be non-negative, got %d", cfg.Seed.MinFolders)
+	// Validate folder fanout config
+	if cfg.Seed.MaxFolders < 0 {
+		return fmt.Errorf("max_folders must be non-negative, got %d", cfg.Seed.MaxFolders)
 	}
 
-	if cfg.Seed.MaxFolders < cfg.Seed.MinFolders {
-		return fmt.Errorf("max_folders (%d) must be >= min_folders (%d)", cfg.Seed.MaxFolders, cfg.Seed.MinFolders)
+	if cfg.Seed.FolderBackoffFactor <= 0.0 || cfg.Seed.FolderBackoffFactor > 1.0 {
+		return fmt.Errorf("folder_backoff_factor must be in (0.0, 1.0], got %f", cfg.Seed.FolderBackoffFactor)
 	}
 
-	if cfg.Seed.MinFiles < 0 {
-		return fmt.Errorf("min_files must be non-negative, got %d", cfg.Seed.MinFiles)
+	if cfg.Seed.FolderDepthDecayFactor <= 0.0 || cfg.Seed.FolderDepthDecayFactor > 1.0 {
+		return fmt.Errorf("folder_depth_decay_factor must be in (0.0, 1.0], got %f", cfg.Seed.FolderDepthDecayFactor)
 	}
 
-	if cfg.Seed.MaxFiles < cfg.Seed.MinFiles {
-		return fmt.Errorf("max_files (%d) must be >= min_files (%d)", cfg.Seed.MaxFiles, cfg.Seed.MinFiles)
+	// Validate file fanout config
+	if cfg.Seed.MaxFiles < 0 {
+		return fmt.Errorf("max_files must be non-negative, got %d", cfg.Seed.MaxFiles)
+	}
+
+	if cfg.Seed.FileBackoffFactor <= 0.0 || cfg.Seed.FileBackoffFactor > 1.0 {
+		return fmt.Errorf("file_backoff_factor must be in (0.0, 1.0], got %f", cfg.Seed.FileBackoffFactor)
+	}
+
+	if cfg.Seed.FileDepthDecayFactor <= 0.0 || cfg.Seed.FileDepthDecayFactor > 1.0 {
+		return fmt.Errorf("file_depth_decay_factor must be in (0.0, 1.0], got %f", cfg.Seed.FileDepthDecayFactor)
 	}
 
 	// Validate API config

@@ -2,13 +2,14 @@ package generator
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/Project-Sylos/Spectra/internal/utils"
-	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 )
 
 // RNG wraps math/rand.Rand for seeded random generation with thread-safety
@@ -45,6 +46,82 @@ func (r *RNG) Read(p []byte) (n int, err error) {
 	return r.rand.Read(p)
 }
 
+// sampleWeightedRange samples from [0, max] using logarithmic buckets with exponential decay.
+// Returns a random value where smaller values are exponentially more likely.
+// Uses buckets: [0,10), [10,100), [100,1000), [1000,max] with weights decaying exponentially.
+func sampleWeightedRange(max int, backoffFactor float64, rng *RNG) int {
+	if max <= 0 {
+		return 0
+	}
+
+	// Define logarithmic bucket boundaries
+	// We use powers of 10: [0,10), [10,100), [100,1000), [1000,max]
+	type bucket struct {
+		min    int
+		max    int
+		weight float64
+	}
+
+	var buckets []bucket
+	var totalWeight float64
+
+	// Create buckets dynamically based on max value
+	currentMin := 0
+	bucketIndex := 0
+	for currentMin < max {
+		var currentMax int
+		if bucketIndex == 0 {
+			currentMax = min(10, max)
+		} else {
+			// Powers of 10: 10, 100, 1000, etc.
+			currentMax = min(int(math.Pow(10, float64(bucketIndex+1))), max)
+		}
+
+		weight := math.Pow(backoffFactor, float64(bucketIndex))
+		buckets = append(buckets, bucket{
+			min:    currentMin,
+			max:    currentMax,
+			weight: weight,
+		})
+		totalWeight += weight
+
+		currentMin = currentMax
+		bucketIndex++
+
+		// Safety check to prevent infinite loop
+		if currentMin >= max {
+			break
+		}
+	}
+
+	// Sample a bucket using weighted random selection
+	target := rng.Float64() * totalWeight
+	cumulative := 0.0
+	selectedBucket := buckets[0]
+
+	for _, b := range buckets {
+		cumulative += b.weight
+		if target <= cumulative {
+			selectedBucket = b
+			break
+		}
+	}
+
+	// Uniform sample within the selected bucket
+	if selectedBucket.max == selectedBucket.min {
+		return selectedBucket.min
+	}
+	return selectedBucket.min + rng.Intn(selectedBucket.max-selectedBucket.min)
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // GenerateChildren generates children nodes for a given parent based on configuration
 // Returns a single list of nodes with ExistenceMap populated for each
 func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config) ([]*types.Node, error) {
@@ -59,8 +136,15 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 		return children, nil
 	}
 
+	// Apply depth decay to effective max values
+	effectiveFolderMax := int(float64(cfg.Seed.MaxFolders) * math.Pow(cfg.Seed.FolderDepthDecayFactor, float64(depth)))
+	effectiveFileMax := int(float64(cfg.Seed.MaxFiles) * math.Pow(cfg.Seed.FileDepthDecayFactor, float64(depth)))
+
+	// Sample counts using weighted distribution
+	folderCount := sampleWeightedRange(effectiveFolderMax, cfg.Seed.FolderBackoffFactor, rng)
+	fileCount := sampleWeightedRange(effectiveFileMax, cfg.Seed.FileBackoffFactor, rng)
+
 	// Generate folders
-	folderCount := rng.Intn(cfg.Seed.MaxFolders-cfg.Seed.MinFolders+1) + cfg.Seed.MinFolders
 	for i := 0; i < folderCount; i++ {
 		folder, err := generateFolder(parent, i+1, depth+1, cfg, rng)
 		if err != nil {
@@ -70,7 +154,6 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	}
 
 	// Generate files
-	fileCount := rng.Intn(cfg.Seed.MaxFiles-cfg.Seed.MinFiles+1) + cfg.Seed.MinFiles
 	for i := 0; i < fileCount; i++ {
 		file, err := generateFile(parent, i+1, depth+1, cfg, rng)
 		if err != nil {
@@ -82,13 +165,13 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	return children, nil
 }
 
-// generateFolder creates a new folder node with UUID and ExistenceMap
+// generateFolder creates a new folder node with ULID and ExistenceMap
 func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("folder_%d", index)
 	path := utils.JoinPath(parent.Path, name)
 
-	// Generate UUID for the node
-	nodeID := uuid.New().String()
+	// Generate ULID for the node
+	nodeID := ulid.Make().String()
 
 	// Create existence map - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
@@ -123,13 +206,13 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 	}, nil
 }
 
-// generateFile creates a new file node with UUID and ExistenceMap
+// generateFile creates a new file node with ULID and ExistenceMap
 func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("file_%d.txt", index)
 	path := utils.JoinPath(parent.Path, name)
 
-	// Generate UUID for the node
-	nodeID := uuid.New().String()
+	// Generate ULID for the node
+	nodeID := ulid.Make().String()
 
 	// Generate file data and checksum deterministically so repeated reads always
 	// return identical content, regardless of node identity
@@ -169,18 +252,4 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 		Checksum:     &checksum, // Store the computed checksum
 		ExistenceMap: existenceMap,
 	}, nil
-}
-
-// ValidateConfig validates the generator configuration
-func ValidateConfig(cfg *types.Config) error {
-	if cfg.Seed.MaxDepth < 1 {
-		return fmt.Errorf("max_depth must be at least 1")
-	}
-	if cfg.Seed.MinFolders < 0 || cfg.Seed.MaxFolders < cfg.Seed.MinFolders {
-		return fmt.Errorf("invalid folder count range: min=%d, max=%d", cfg.Seed.MinFolders, cfg.Seed.MaxFolders)
-	}
-	if cfg.Seed.MinFiles < 0 || cfg.Seed.MaxFiles < cfg.Seed.MinFiles {
-		return fmt.Errorf("invalid file count range: min=%d, max=%d", cfg.Seed.MinFiles, cfg.Seed.MaxFiles)
-	}
-	return nil
 }

@@ -10,19 +10,39 @@ import (
 
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/Project-Sylos/Spectra/internal/utils"
-	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 	"go.etcd.io/bbolt"
 )
+
+// statsUpdate represents a single stats update operation
+type statsUpdate struct {
+	node      *types.Node
+	increment bool
+}
+
+// StatsBuffer handles asynchronous batched stats updates
+type StatsBuffer struct {
+	updates       chan statsUpdate
+	forceFlush    chan struct{}
+	done          chan struct{}
+	buffer        []statsUpdate
+	bufferSize    int
+	flushInterval time.Duration
+	mu            sync.Mutex
+	db            *DB
+}
 
 // DB wraps BoltDB connection and provides key-value CRUD operations
 type DB struct {
 	db              *bbolt.DB
-	secondaryTables []string   // List of secondary world names (e.g., ["s1", "s2"])
-	mu              sync.Mutex // Protects all database operations from concurrent access
+	secondaryTables []string      // List of secondary world names (e.g., ["s1", "s2"])
+	statsBuffer     *StatsBuffer  // Async stats buffer
+	outputBuffer    *OutputBuffer // Buffered write operations
+	nodeCache       *NodeCache    // Optional sliding window cache
 }
 
 // New creates a new database connection and initializes the schema
-func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
+func New(dbPath string, secondaryTables map[string]float64, enableCache bool) (*DB, error) {
 	// Check if database file exists
 	dbFileExists := false
 	if _, err := os.Stat(dbPath); err == nil {
@@ -52,6 +72,16 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 		return nil, fmt.Errorf("failed to verify and initialize database: %w", err)
 	}
 
+	// Initialize stats buffer
+	db.statsBuffer = newStatsBuffer(db, 100, 500*time.Millisecond)
+	db.statsBuffer.start()
+
+	// Initialize output buffer (batch size 10K, flush every 5 seconds)
+	db.outputBuffer = NewOutputBuffer(db, 10000, 5*time.Second)
+
+	// Initialize node cache
+	db.nodeCache = NewNodeCache(enableCache)
+
 	return db, nil
 }
 
@@ -60,10 +90,9 @@ func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 // A) Database file exists (checked before connection)
 // B) Buckets exist
 // C) Root node exists
+// D) Stats are initialized
+// This is a glue function - it does not lock, but calls functions that handle their own locking
 func (db *DB) VerifyAndInitialize(dbFileExists bool, secondaryTables map[string]float64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	// B) Initialize or verify buckets exist
 	if !dbFileExists {
 		// New database - create all buckets
@@ -77,20 +106,20 @@ func (db *DB) VerifyAndInitialize(dbFileExists bool, secondaryTables map[string]
 		}
 	}
 
-	// C) Check if root node exists
+	// C) Check if root node exists (rootNodeExists handles its own locking)
 	rootExists, err := db.rootNodeExists()
 	if err != nil {
 		return fmt.Errorf("failed to check if root node exists: %w", err)
 	}
 
 	if !rootExists {
-		// Create root node
+		// Create root node (createRootNodeInternal handles its own locking)
 		if err := db.createRootNodeInternal(); err != nil {
 			return fmt.Errorf("failed to create root node: %w", err)
 		}
 	}
 
-	// D) Initialize stats if needed
+	// D) Initialize stats if needed (initializeStats calls getStats/setStats which handle locking)
 	if err := db.initializeStats(); err != nil {
 		return fmt.Errorf("failed to initialize stats: %w", err)
 	}
@@ -118,7 +147,7 @@ func (db *DB) rootNodeExists() (bool, error) {
 	return exists, nil
 }
 
-// createRootNodeInternal creates the root node (internal, assumes lock is held)
+// createRootNodeInternal creates the root node
 func (db *DB) createRootNodeInternal() error {
 	// Create existence map with all worlds
 	existenceMap := make(map[string]bool)
@@ -140,10 +169,9 @@ func (db *DB) createRootNodeInternal() error {
 		LastUpdated:  time.Now(),
 		Checksum:     nil,
 		ExistenceMap: existenceMap,
+		ChildIDs:     []string{}, // Initialize empty ChildIDs array
 	}
 
-	// Use InsertNode logic but within the existing transaction context
-	// Since lock is already held, we can't call InsertNode directly
 	return db.db.Update(func(tx *bbolt.Tx) error {
 		// Serialize node to JSON
 		nodeJSON, err := json.Marshal(rootNode)
@@ -159,15 +187,6 @@ func (db *DB) createRootNodeInternal() error {
 
 		if err := nodesBucket.Put([]byte("root"), nodeJSON); err != nil {
 			return fmt.Errorf("failed to create root node: %w", err)
-		}
-
-		// Update index_parent_id: key format "{parentID}|{nodeID}"
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID != nil {
-			parentIDKey := fmt.Sprintf("%s|%s", rootNode.ParentID, rootNode.ID)
-			if err := indexParentID.Put([]byte(parentIDKey), []byte{}); err != nil {
-				return fmt.Errorf("failed to update parent_id index: %w", err)
-			}
 		}
 
 		// Update index_path: key format "{path}" -> value "{nodeID}"
@@ -194,80 +213,43 @@ func (db *DB) createRootNodeInternal() error {
 // Close closes the database connection
 // BoltDB is ACID compliant and automatically persists all changes
 func (db *DB) Close() error {
+	// Force flush output buffer before shutdown to ensure all operations are persisted
+	if db.outputBuffer != nil {
+		db.outputBuffer.Flush() // Synchronous flush
+		db.outputBuffer.Stop()  // Then stop the background goroutine
+	}
+	// Shutdown stats buffer and force flush
+	if db.statsBuffer != nil {
+		db.statsBuffer.shutdown()
+	}
 	return db.db.Close()
 }
 
 // InsertNode inserts a new node into the nodes bucket and updates all indexes
 func (db *DB) InsertNode(node *types.Node) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// Add to output buffer
+	op := &InsertNodeOperation{Node: node}
+	db.outputBuffer.Add(op)
 
-	err := db.db.Update(func(tx *bbolt.Tx) error {
-		// Serialize node to JSON
-		nodeJSON, err := json.Marshal(node)
-		if err != nil {
-			return fmt.Errorf("[SpectraFS] failed to marshal node %s: %w", node.ID, err)
-		}
-
-		// Store node in nodes bucket
-		nodesBucket := tx.Bucket([]byte(bucketNodes))
-		if nodesBucket == nil {
-			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
-		}
-
-		if err := nodesBucket.Put([]byte(node.ID), nodeJSON); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to insert node %s: %w", node.ID, err)
-		}
-
-		// Update index_parent_id: key format "{parentID}|{nodeID}"
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_id bucket does not exist")
-		}
-		parentIDKey := fmt.Sprintf("%s|%s", node.ParentID, node.ID)
-		if err := indexParentID.Put([]byte(parentIDKey), []byte{}); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to update parent_id index for node %s: %w", node.ID, err)
-		}
-
-		// Update index_path: key format "{path}" -> value "{nodeID}"
-		indexPath := tx.Bucket([]byte(bucketIndexPath))
-		if indexPath == nil {
-			return fmt.Errorf("[SpectraFS] index_path bucket does not exist")
-		}
-		if err := indexPath.Put([]byte(node.Path), []byte(node.ID)); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to update path index for node %s: %w", node.ID, err)
-		}
-
-		// Update index_parent_path: key format "{parentPath}|{nodeID}"
-		indexParentPath := tx.Bucket([]byte(bucketIndexParentPath))
-		if indexParentPath == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_path bucket does not exist")
-		}
-		parentPathKey := fmt.Sprintf("%s|%s", node.ParentPath, node.ID)
-		if err := indexParentPath.Put([]byte(parentPathKey), []byte{}); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to update parent_path index for node %s: %w", node.ID, err)
-		}
-
-		return nil
-	})
-
-	// Update stats after successful insertion
-	if err == nil {
-		if err := db.updateStatsForNode(node, true); err != nil {
-			// Log error but don't fail the insertion
-			// Stats update failure shouldn't prevent node insertion
-			_ = err
-		}
+	// Queue stats update (async, non-blocking)
+	if db.statsBuffer != nil {
+		db.statsBuffer.queueUpdate(node, true)
 	}
 
-	return err
+	return nil
 }
 
 // GetNodeByID retrieves a node by its ID from the nodes bucket
 func (db *DB) GetNodeByID(id string) (*types.Node, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// Check cache first (if enabled)
+	if node, ok := db.nodeCache.Get(id); ok {
+		return node, nil
+	}
 
+	// Flush buffer if this node has pending writes
+	db.Flush(id)
+
+	// BoltDB handles its own read locking
 	var node *types.Node
 	err := db.db.View(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
@@ -292,45 +274,49 @@ func (db *DB) GetNodeByID(id string) (*types.Node, error) {
 		return nil, err
 	}
 
+	// Don't add to cache on miss (per requirement)
 	return node, nil
 }
 
 // GetChildrenByParentID retrieves all children of a parent node filtered by world
 func (db *DB) GetChildrenByParentID(parentID, world string) ([]*types.Node, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// Flush buffer if this node has pending writes
+	db.Flush(parentID)
 
+	// BoltDB handles its own read locking
 	var children []*types.Node
 	err := db.db.View(func(tx *bbolt.Tx) error {
-		// Use index_parent_id bucket to find all children
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_id bucket does not exist")
-		}
-
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket == nil {
 			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
 		}
 
-		// Prefix to search for: "{parentID}|"
-		prefix := []byte(parentID + "|")
-		cursor := indexParentID.Cursor()
+		// Get parent node to retrieve ChildIDs
+		parentData := nodesBucket.Get([]byte(parentID))
+		if parentData == nil {
+			return fmt.Errorf("[SpectraFS] parent node not found: %s", parentID)
+		}
 
-		// Iterate over all keys with the parentID prefix
-		for key, _ := cursor.Seek(prefix); key != nil && len(key) > len(prefix) && string(key[:len(prefix)]) == string(prefix); key, _ = cursor.Next() {
-			// Extract nodeID from key: "{parentID}|{nodeID}"
-			nodeID := string(key[len(prefix):])
+		var parent types.Node
+		if err := json.Unmarshal(parentData, &parent); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to unmarshal parent node %s: %w", parentID, err)
+		}
 
-			// Get node from nodes bucket
-			nodeData := nodesBucket.Get([]byte(nodeID))
+		// Use parent's ChildIDs for O(1) lookup
+		if parent.ChildIDs == nil {
+			return nil // No children
+		}
+
+		// Get each child node by ID
+		for _, childID := range parent.ChildIDs {
+			nodeData := nodesBucket.Get([]byte(childID))
 			if nodeData == nil {
-				continue // Skip if node not found
+				continue // Skip if node not found (shouldn't happen)
 			}
 
 			var node types.Node
 			if err := json.Unmarshal(nodeData, &node); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", nodeID, err)
+				return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", childID, err)
 			}
 
 			// Filter by world - check existence map
@@ -360,9 +346,10 @@ func (db *DB) GetChildrenByParentID(parentID, world string) ([]*types.Node, erro
 // GetParentAndChildren retrieves parent and all its children in ONE optimized query
 // This is the key performance optimization for ListChildren operations
 func (db *DB) GetParentAndChildren(parentID, world string) ([]*types.Node, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// Flush buffer if this node has pending writes
+	db.Flush(parentID)
 
+	// BoltDB handles its own read locking
 	var nodes []*types.Node
 	err := db.db.View(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
@@ -372,46 +359,37 @@ func (db *DB) GetParentAndChildren(parentID, world string) ([]*types.Node, error
 
 		// Get parent node
 		parentData := nodesBucket.Get([]byte(parentID))
-		if parentData != nil {
-			var parent types.Node
-			if err := json.Unmarshal(parentData, &parent); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to unmarshal parent node %s: %w", parentID, err)
-			}
-			// Filter by world
-			if parent.ExistenceMap[world] {
-				nodes = append(nodes, &parent)
-			}
+		if parentData == nil {
+			return fmt.Errorf("[SpectraFS] parent node not found: %s", parentID)
 		}
 
-		// Get children using index_parent_id
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_id bucket does not exist")
+		var parent types.Node
+		if err := json.Unmarshal(parentData, &parent); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to unmarshal parent node %s: %w", parentID, err)
 		}
 
-		// Prefix to search for: "{parentID}|"
-		prefix := []byte(parentID + "|")
-		cursor := indexParentID.Cursor()
+		// Add parent if it exists in the world
+		if parent.ExistenceMap[world] {
+			nodes = append(nodes, &parent)
+		}
 
-		// Iterate over all keys with the parentID prefix
-		for key, _ := cursor.Seek(prefix); key != nil && len(key) > len(prefix) && string(key[:len(prefix)]) == string(prefix); key, _ = cursor.Next() {
-			// Extract nodeID from key: "{parentID}|{nodeID}"
-			nodeID := string(key[len(prefix):])
+		// Get children using parent's ChildIDs array (O(1) per child)
+		if parent.ChildIDs != nil {
+			for _, childID := range parent.ChildIDs {
+				nodeData := nodesBucket.Get([]byte(childID))
+				if nodeData == nil {
+					continue // Skip if node not found (shouldn't happen)
+				}
 
-			// Get node from nodes bucket
-			nodeData := nodesBucket.Get([]byte(nodeID))
-			if nodeData == nil {
-				continue // Skip if node not found
-			}
+				var node types.Node
+				if err := json.Unmarshal(nodeData, &node); err != nil {
+					return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", childID, err)
+				}
 
-			var node types.Node
-			if err := json.Unmarshal(nodeData, &node); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", nodeID, err)
-			}
-
-			// Filter by world - check existence map
-			if node.ExistenceMap[world] {
-				nodes = append(nodes, &node)
+				// Filter by world - check existence map
+				if node.ExistenceMap[world] {
+					nodes = append(nodes, &node)
+				}
 			}
 		}
 
@@ -443,46 +421,43 @@ func (db *DB) GetParentAndChildren(parentID, world string) ([]*types.Node, error
 
 // CheckChildrenExist checks if a parent has any children in a specific world
 func (db *DB) CheckChildrenExist(parentID, world string) (bool, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
+	// BoltDB handles its own read locking
 	var hasChildren bool
 	err := db.db.View(func(tx *bbolt.Tx) error {
-		// Use index_parent_id bucket to find children
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_id bucket does not exist")
-		}
-
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket == nil {
 			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
 		}
 
-		// Prefix to search for: "{parentID}|"
-		prefix := []byte(parentID + "|")
-		cursor := indexParentID.Cursor()
+		// Get parent node to check ChildIDs
+		parentData := nodesBucket.Get([]byte(parentID))
+		if parentData == nil {
+			return fmt.Errorf("[SpectraFS] parent node not found: %s", parentID)
+		}
+
+		var parent types.Node
+		if err := json.Unmarshal(parentData, &parent); err != nil {
+			return fmt.Errorf("[SpectraFS] failed to unmarshal parent node %s: %w", parentID, err)
+		}
 
 		// Check if any child exists in the specified world
-		for key, _ := cursor.Seek(prefix); key != nil && len(key) > len(prefix) && string(key[:len(prefix)]) == string(prefix); key, _ = cursor.Next() {
-			// Extract nodeID from key: "{parentID}|{nodeID}"
-			nodeID := string(key[len(prefix):])
+		if parent.ChildIDs != nil {
+			for _, childID := range parent.ChildIDs {
+				nodeData := nodesBucket.Get([]byte(childID))
+				if nodeData == nil {
+					continue // Skip if node not found
+				}
 
-			// Get node from nodes bucket
-			nodeData := nodesBucket.Get([]byte(nodeID))
-			if nodeData == nil {
-				continue // Skip if node not found
-			}
+				var node types.Node
+				if err := json.Unmarshal(nodeData, &node); err != nil {
+					continue // Skip on error
+				}
 
-			var node types.Node
-			if err := json.Unmarshal(nodeData, &node); err != nil {
-				continue // Skip on error
-			}
-
-			// Check if node exists in the specified world
-			if node.ExistenceMap[world] {
-				hasChildren = true
-				return nil // Found one, we can return early
+				// Check if node exists in the specified world
+				if node.ExistenceMap[world] {
+					hasChildren = true
+					return nil // Found one, we can return early
+				}
 			}
 		}
 
@@ -498,49 +473,18 @@ func (db *DB) CheckChildrenExist(parentID, world string) (bool, error) {
 
 // UpdateExistenceMap updates the existence map for a node
 func (db *DB) UpdateExistenceMap(id string, existenceMap map[string]bool) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	return db.db.Update(func(tx *bbolt.Tx) error {
-		nodesBucket := tx.Bucket([]byte(bucketNodes))
-		if nodesBucket == nil {
-			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
-		}
-
-		// Get existing node
-		nodeData := nodesBucket.Get([]byte(id))
-		if nodeData == nil {
-			return fmt.Errorf("[SpectraFS] node %s not found", id)
-		}
-
-		var node types.Node
-		if err := json.Unmarshal(nodeData, &node); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", id, err)
-		}
-
-		// Update existence map
-		node.ExistenceMap = existenceMap
-
-		// Serialize updated node
-		updatedNodeData, err := json.Marshal(node)
-		if err != nil {
-			return fmt.Errorf("[SpectraFS] failed to marshal node %s: %w", id, err)
-		}
-
-		// Store updated node
-		if err := nodesBucket.Put([]byte(id), updatedNodeData); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to update existence map for %s: %w", id, err)
-		}
-
-		return nil
-	})
+	// Add to output buffer
+	op := &UpdateExistenceMapOperation{
+		NodeID:       id,
+		ExistenceMap: existenceMap,
+	}
+	db.outputBuffer.Add(op)
+	return nil
 }
 
 // DeleteAllNodes removes all nodes from the nodes bucket and all indexes (for Reset)
 func (db *DB) DeleteAllNodes() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
+	// BoltDB handles its own write locking
 	err := db.db.Update(func(tx *bbolt.Tx) error {
 		// Delete all nodes from nodes bucket
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
@@ -554,7 +498,7 @@ func (db *DB) DeleteAllNodes() error {
 		}
 
 		// Delete all entries from index buckets
-		indexBuckets := []string{bucketIndexParentID, bucketIndexPath, bucketIndexParentPath}
+		indexBuckets := []string{bucketIndexPath, bucketIndexParentPath}
 		for _, bucketName := range indexBuckets {
 			bucket := tx.Bucket([]byte(bucketName))
 			if bucket != nil {
@@ -584,9 +528,7 @@ func (db *DB) DeleteAllNodes() error {
 
 // GetNodeCount returns the total number of nodes in a specific world
 func (db *DB) GetNodeCount(world string) (int, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
+	// BoltDB handles its own read locking
 	var count int
 	err := db.db.View(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
@@ -619,9 +561,7 @@ func (db *DB) GetNodeCount(world string) (int, error) {
 
 // GetTableInfo returns information about all worlds
 func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
+	// BoltDB handles its own read locking
 	var tables []types.TableInfo
 
 	// Get counts for all worlds in a single pass
@@ -680,13 +620,10 @@ func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
 
 // CreateFolder creates a new folder node
 func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// Generate ULID for the new folder
+	nodeID := ulid.Make().String()
 
-	// Generate UUID for the new folder
-	nodeID := uuid.New().String()
-
-	// Get parent node to determine path
+	// Get parent node to determine path (BoltDB handles its own read locking)
 	var parentPath string
 	err := db.db.View(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
@@ -725,6 +662,7 @@ func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error
 		LastUpdated:  time.Now(),
 		Checksum:     nil, // Folders don't have checksums
 		ExistenceMap: make(map[string]bool),
+		ChildIDs:     []string{}, // Initialize empty ChildIDs array
 	}
 
 	return folderNode, nil
@@ -733,9 +671,7 @@ func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error
 // CreateRootNode creates a single root node with existence in all worlds
 // This function is idempotent - it will skip creating the node if it already exists
 func (db *DB) CreateRootNode() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
+	// BoltDB handles its own write locking
 	return db.db.Update(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket == nil {
@@ -769,6 +705,7 @@ func (db *DB) CreateRootNode() error {
 			LastUpdated:  time.Now(),
 			Checksum:     nil,
 			ExistenceMap: existenceMap,
+			ChildIDs:     []string{}, // Initialize empty ChildIDs array
 		}
 
 		// Serialize node to JSON
@@ -780,15 +717,6 @@ func (db *DB) CreateRootNode() error {
 		// Store node in nodes bucket
 		if err := nodesBucket.Put([]byte("root"), nodeJSON); err != nil {
 			return fmt.Errorf("[SpectraFS] failed to create root node: %w", err)
-		}
-
-		// Update index_parent_id: key format "{parentID}|{nodeID}"
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID != nil {
-			parentIDKey := fmt.Sprintf("%s|%s", rootNode.ParentID, rootNode.ID)
-			if err := indexParentID.Put([]byte(parentIDKey), []byte{}); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to update parent_id index: %w", err)
-			}
 		}
 
 		// Update index_path: key format "{path}" -> value "{nodeID}"
@@ -814,67 +742,32 @@ func (db *DB) CreateRootNode() error {
 
 // DeleteNode deletes a node from the nodes bucket and all indexes
 func (db *DB) DeleteNode(id string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	var node types.Node
-	err := db.db.Update(func(tx *bbolt.Tx) error {
-		// First, get the node to retrieve its path and parent info for index cleanup
+	// Get node first for stats update (before deletion)
+	// BoltDB handles its own read locking
+	var node *types.Node
+	err := db.db.View(func(tx *bbolt.Tx) error {
 		nodesBucket := tx.Bucket([]byte(bucketNodes))
 		if nodesBucket == nil {
-			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
+			return fmt.Errorf("nodes bucket does not exist")
 		}
-
 		nodeData := nodesBucket.Get([]byte(id))
 		if nodeData == nil {
-			return fmt.Errorf("[SpectraFS] node not found: %s", id)
+			return fmt.Errorf("node not found: %s", id)
 		}
-
-		if err := json.Unmarshal(nodeData, &node); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to unmarshal node %s: %w", id, err)
-		}
-
-		// Delete from nodes bucket
-		if err := nodesBucket.Delete([]byte(id)); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to delete node %s: %w", id, err)
-		}
-
-		// Delete from index_parent_id
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID != nil {
-			parentIDKey := fmt.Sprintf("%s|%s", node.ParentID, node.ID)
-			if err := indexParentID.Delete([]byte(parentIDKey)); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to delete from parent_id index: %w", err)
-			}
-		}
-
-		// Delete from index_path
-		indexPath := tx.Bucket([]byte(bucketIndexPath))
-		if indexPath != nil {
-			if err := indexPath.Delete([]byte(node.Path)); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to delete from path index: %w", err)
-			}
-		}
-
-		// Delete from index_parent_path
-		indexParentPath := tx.Bucket([]byte(bucketIndexParentPath))
-		if indexParentPath != nil {
-			parentPathKey := fmt.Sprintf("%s|%s", node.ParentPath, node.ID)
-			if err := indexParentPath.Delete([]byte(parentPathKey)); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to delete from parent_path index: %w", err)
-			}
-		}
-
-		return nil
+		node = &types.Node{}
+		return json.Unmarshal(nodeData, node)
 	})
 
-	// Update stats after successful deletion
-	if err == nil {
-		if err := db.updateStatsForNode(&node, false); err != nil {
-			// Log error but don't fail the deletion
-			// Stats update failure shouldn't prevent node deletion
-			_ = err
-		}
+	// Add to output buffer (buffer handles its own locking)
+	op := &DeleteNodeOperation{
+		NodeID:   id,
+		ParentID: node.ParentID, // Include parent ID for ChildIDs update tracking
+	}
+	db.outputBuffer.Add(op)
+
+	// Queue stats update (async, non-blocking)
+	if err == nil && db.statsBuffer != nil && node != nil {
+		db.statsBuffer.queueUpdate(node, false)
 	}
 
 	return err
@@ -885,142 +778,141 @@ func (db *DB) GetSecondaryTables() []string {
 	return db.secondaryTables
 }
 
-// initializeStats initializes the stats bucket with zero values
-func (db *DB) initializeStats() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	return db.db.Update(func(tx *bbolt.Tx) error {
-		statsBucket := tx.Bucket([]byte(bucketStats))
-		if statsBucket == nil {
-			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
-		}
-
-		// Check if stats already exist
-		statsData := statsBucket.Get([]byte("global"))
-		if statsData != nil {
-			// Stats already initialized
-			return nil
-		}
-
-		// Initialize with zero values
-		stats := &types.Stats{
-			FileCount:      0,
-			FolderCount:    0,
-			TotalFileSize:  0,
-			SecondaryNodes: make(map[string]int64),
-		}
-
-		// Initialize secondary nodes map for each secondary world
-		for _, worldName := range db.secondaryTables {
-			stats.SecondaryNodes[worldName] = 0
-		}
-
-		statsJSON, err := json.Marshal(stats)
-		if err != nil {
-			return fmt.Errorf("[SpectraFS] failed to marshal stats: %w", err)
-		}
-
-		if err := statsBucket.Put([]byte("global"), statsJSON); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to initialize stats: %w", err)
-		}
-
-		return nil
-	})
+// newStatsBuffer creates a new stats buffer
+func newStatsBuffer(db *DB, bufferSize int, flushInterval time.Duration) *StatsBuffer {
+	return &StatsBuffer{
+		updates:       make(chan statsUpdate, 1000), // Buffered channel for non-blocking sends
+		forceFlush:    make(chan struct{}, 1),
+		done:          make(chan struct{}),
+		buffer:        make([]statsUpdate, 0, bufferSize),
+		bufferSize:    bufferSize,
+		flushInterval: flushInterval,
+		db:            db,
+	}
 }
 
-// updateStatsForNode increments stats for a newly inserted node
-// NOTE: This function assumes the caller already holds db.mu lock
-func (db *DB) updateStatsForNode(node *types.Node, increment bool) error {
-	return db.db.Update(func(tx *bbolt.Tx) error {
-		statsBucket := tx.Bucket([]byte(bucketStats))
-		if statsBucket == nil {
-			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
-		}
-
-		// Get current stats
-		statsData := statsBucket.Get([]byte("global"))
-		if statsData == nil {
-			// Stats not initialized, initialize them
-			stats := &types.Stats{
-				FileCount:      0,
-				FolderCount:    0,
-				TotalFileSize:  0,
-				SecondaryNodes: make(map[string]int64),
-			}
-			for _, worldName := range db.secondaryTables {
-				stats.SecondaryNodes[worldName] = 0
-			}
-			statsData, _ = json.Marshal(stats)
-		}
-
-		var stats types.Stats
-		if err := json.Unmarshal(statsData, &stats); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to unmarshal stats: %w", err)
-		}
-
-		// Ensure SecondaryNodes map is initialized
-		if stats.SecondaryNodes == nil {
-			stats.SecondaryNodes = make(map[string]int64)
-		}
-
-		// Update stats based on node type
-		delta := int64(1)
-		if !increment {
-			delta = -1
-		}
-
-		switch node.Type {
-		case types.NodeTypeFile:
-			stats.FileCount += delta
-			if increment {
-				stats.TotalFileSize += node.Size
-			} else {
-				stats.TotalFileSize -= node.Size
-				if stats.TotalFileSize < 0 {
-					stats.TotalFileSize = 0
-				}
-			}
-		case types.NodeTypeFolder:
-			stats.FolderCount += delta
-		}
-
-		// Update secondary node counts for each world
-		for worldName := range stats.SecondaryNodes {
-			if node.ExistenceMap[worldName] {
-				stats.SecondaryNodes[worldName] += delta
-				if stats.SecondaryNodes[worldName] < 0 {
-					stats.SecondaryNodes[worldName] = 0
-				}
-			}
-		}
-
-		// Ensure all secondary worlds are in the map
-		for _, worldName := range db.secondaryTables {
-			if _, exists := stats.SecondaryNodes[worldName]; !exists {
-				stats.SecondaryNodes[worldName] = 0
-			}
-		}
-
-		// Save updated stats
-		updatedStatsJSON, err := json.Marshal(stats)
-		if err != nil {
-			return fmt.Errorf("[SpectraFS] failed to marshal updated stats: %w", err)
-		}
-
-		if err := statsBucket.Put([]byte("global"), updatedStatsJSON); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to update stats: %w", err)
-		}
-
-		return nil
-	})
+// start begins the async buffer processing
+func (sb *StatsBuffer) start() {
+	go sb.processLoop()
 }
 
-// GetStats retrieves the current filesystem statistics
-func (db *DB) GetStats() (*types.Stats, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+// processLoop is the main loop that processes stats updates
+func (sb *StatsBuffer) processLoop() {
+	ticker := time.NewTicker(sb.flushInterval)
+	defer ticker.Stop()
 
+	for {
+		select {
+		case update := <-sb.updates:
+			// Add to buffer
+			sb.mu.Lock()
+			sb.buffer = append(sb.buffer, update)
+			shouldFlush := len(sb.buffer) >= sb.bufferSize
+			sb.mu.Unlock()
+
+			// Flush if buffer is full
+			if shouldFlush {
+				sb.flush()
+			}
+
+		case <-ticker.C:
+			// Time-based flush
+			sb.flush()
+
+		case <-sb.forceFlush:
+			// Manual flush requested
+			sb.flush()
+
+		case <-sb.done:
+			// Shutdown - flush remaining updates and exit
+			sb.flush()
+			return
+		}
+	}
+}
+
+// flush processes all buffered updates
+func (sb *StatsBuffer) flush() {
+	sb.mu.Lock()
+	if len(sb.buffer) == 0 {
+		sb.mu.Unlock()
+		return
+	}
+
+	// Take snapshot and clear buffer
+	snapshot := make([]statsUpdate, len(sb.buffer))
+	copy(snapshot, sb.buffer)
+	sb.buffer = sb.buffer[:0] // Clear buffer but keep capacity
+	sb.mu.Unlock()
+
+	// Process snapshot asynchronously (don't block incoming updates)
+	go sb.processSnapshot(snapshot)
+}
+
+// processSnapshot applies batched stats updates
+func (sb *StatsBuffer) processSnapshot(updates []statsUpdate) {
+	if len(updates) == 0 {
+		return
+	}
+
+	// Separate into increment and decrement nodes
+	incrementNodes := make([]*types.Node, 0, len(updates))
+	decrementNodes := make([]*types.Node, 0, len(updates))
+
+	for _, update := range updates {
+		if update.increment {
+			incrementNodes = append(incrementNodes, update.node)
+		} else {
+			decrementNodes = append(decrementNodes, update.node)
+		}
+	}
+
+	// Apply increments
+	if len(incrementNodes) > 0 {
+		if err := sb.db.updateStatsForNodes(incrementNodes, true); err != nil {
+			// Log error but don't fail - stats are non-critical
+			_ = err
+		}
+	}
+
+	// Apply decrements
+	if len(decrementNodes) > 0 {
+		if err := sb.db.updateStatsForNodes(decrementNodes, false); err != nil {
+			// Log error but don't fail - stats are non-critical
+			_ = err
+		}
+	}
+}
+
+// queueUpdate adds a stats update to the buffer (non-blocking)
+func (sb *StatsBuffer) queueUpdate(node *types.Node, increment bool) {
+	select {
+	case sb.updates <- statsUpdate{node: node, increment: increment}:
+		// Successfully queued
+	default:
+		// Channel full - drop update (stats are non-critical)
+	}
+}
+
+// Flush forces an immediate flush of the buffer
+func (sb *StatsBuffer) Flush() {
+	select {
+	case sb.forceFlush <- struct{}{}:
+	default:
+		// Flush already in progress
+	}
+}
+
+// shutdown stops the buffer and flushes remaining updates
+func (sb *StatsBuffer) shutdown() {
+	close(sb.done)
+	// Give it a moment to flush
+	time.Sleep(100 * time.Millisecond)
+}
+
+// getStats retrieves stats from the database
+func (db *DB) getStats() (*types.Stats, error) {
+	// BoltDB handles its own read locking
 	var stats *types.Stats
 	err := db.db.View(func(tx *bbolt.Tx) error {
 		statsBucket := tx.Bucket([]byte(bucketStats))
@@ -1064,33 +956,16 @@ func (db *DB) GetStats() (*types.Stats, error) {
 		return nil
 	})
 
-	if err != nil {
-		return nil, err
-	}
-
-	return stats, nil
+	return stats, err
 }
 
-// resetStats resets all stats to zero
-// NOTE: This function assumes the caller already holds db.mu lock
-func (db *DB) resetStats() error {
+// setStats saves stats to the database
+func (db *DB) setStats(stats *types.Stats) error {
+	// BoltDB handles its own write locking
 	return db.db.Update(func(tx *bbolt.Tx) error {
 		statsBucket := tx.Bucket([]byte(bucketStats))
 		if statsBucket == nil {
 			return fmt.Errorf("[SpectraFS] stats bucket does not exist")
-		}
-
-		// Reset to zero values
-		stats := &types.Stats{
-			FileCount:      0,
-			FolderCount:    0,
-			TotalFileSize:  0,
-			SecondaryNodes: make(map[string]int64),
-		}
-
-		// Initialize secondary nodes map for each secondary world
-		for _, worldName := range db.secondaryTables {
-			stats.SecondaryNodes[worldName] = 0
 		}
 
 		statsJSON, err := json.Marshal(stats)
@@ -1099,124 +974,243 @@ func (db *DB) resetStats() error {
 		}
 
 		if err := statsBucket.Put([]byte("global"), statsJSON); err != nil {
-			return fmt.Errorf("[SpectraFS] failed to reset stats: %w", err)
+			return fmt.Errorf("[SpectraFS] failed to save stats: %w", err)
 		}
 
 		return nil
 	})
+}
+
+// initializeStats initializes the stats bucket with zero values
+func (db *DB) initializeStats() error {
+	// Check if stats already exist
+	existingStats, err := db.getStats()
+	if err != nil {
+		return err
+	}
+
+	// If stats already exist (not all zeros), don't reinitialize
+	if existingStats.FileCount != 0 || existingStats.FolderCount != 0 || existingStats.TotalFileSize != 0 {
+		return nil
+	}
+
+	// Initialize with zero values
+	stats := &types.Stats{
+		FileCount:      0,
+		FolderCount:    0,
+		TotalFileSize:  0,
+		SecondaryNodes: make(map[string]int64),
+	}
+
+	// Initialize secondary nodes map for each secondary world
+	for _, worldName := range db.secondaryTables {
+		stats.SecondaryNodes[worldName] = 0
+	}
+
+	return db.setStats(stats)
+}
+
+// updateStatsForNodes batch updates stats for multiple nodes (optimized for bulk operations)
+func (db *DB) updateStatsForNodes(nodes []*types.Node, increment bool) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	// Get current stats once (getStats handles locking)
+	stats, err := db.getStats()
+	if err != nil {
+		return err
+	}
+
+	delta := int64(1)
+	if !increment {
+		delta = -1
+	}
+
+	// Update stats for all nodes
+	for _, node := range nodes {
+		switch node.Type {
+		case types.NodeTypeFile:
+			stats.FileCount += delta
+			if increment {
+				stats.TotalFileSize += node.Size
+			} else {
+				stats.TotalFileSize -= node.Size
+			}
+		case types.NodeTypeFolder:
+			stats.FolderCount += delta
+		}
+
+		// Update secondary node counts for each world
+		for worldName := range stats.SecondaryNodes {
+			if node.ExistenceMap[worldName] {
+				stats.SecondaryNodes[worldName] += delta
+			}
+		}
+	}
+
+	// Ensure no negative values
+	if stats.FileCount < 0 {
+		stats.FileCount = 0
+	}
+	if stats.FolderCount < 0 {
+		stats.FolderCount = 0
+	}
+	if stats.TotalFileSize < 0 {
+		stats.TotalFileSize = 0
+	}
+	for worldName := range stats.SecondaryNodes {
+		if stats.SecondaryNodes[worldName] < 0 {
+			stats.SecondaryNodes[worldName] = 0
+		}
+	}
+
+	// Ensure all secondary worlds are in the map
+	for _, worldName := range db.secondaryTables {
+		if _, exists := stats.SecondaryNodes[worldName]; !exists {
+			stats.SecondaryNodes[worldName] = 0
+		}
+	}
+
+	// Save updated stats once (setStats handles locking)
+	return db.setStats(stats)
+}
+
+// GetStats retrieves the current filesystem statistics
+func (db *DB) GetStats() (*types.Stats, error) {
+	return db.getStats()
+}
+
+// FlushStats forces an immediate flush of the stats buffer
+func (db *DB) FlushStats() {
+	if db.statsBuffer != nil {
+		db.statsBuffer.Flush()
+		// Wait a moment for flush to complete
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Flush forces an immediate flush of the output buffer.
+// If nodeID is provided, only flushes if that node has pending writes.
+// If nodeID is empty, always flushes.
+func (db *DB) Flush(nodeIDs ...string) bool {
+	if db.outputBuffer == nil {
+		return false
+	}
+
+	// If nodeIDs provided, check if ANY have pending writes
+	if len(nodeIDs) > 0 {
+		hasPending := false
+		for _, nodeID := range nodeIDs {
+			if nodeID != "" && db.outputBuffer.HasPendingWrites(nodeID) {
+				hasPending = true
+				break // Short-circuit on first match
+			}
+		}
+		if !hasPending {
+			return false // No flush needed
+		}
+	}
+
+	db.outputBuffer.Flush()
+	return true // Flush occurred
+}
+
+// AddToCache adds a node to the cache (if cache is enabled)
+func (db *DB) AddToCache(node *types.Node) {
+	if db.nodeCache != nil {
+		db.nodeCache.Set(node)
+	}
+}
+
+// EvictOldGenerations performs safe eviction of old nodes from the cache
+// Flushes buffer for any nodes that need to be evicted to ensure data durability
+func (db *DB) EvictOldGenerations() {
+	if db.nodeCache == nil {
+		return
+	}
+
+	// Get nodes that should be evicted
+	toEvict := db.nodeCache.GetNodesForEviction()
+	if len(toEvict) == 0 {
+		return
+	}
+
+	// Flush buffer if any of these nodes have pending writes
+	db.Flush(toEvict...)
+
+	// Now safe to evict from cache
+	db.nodeCache.EvictNodes(toEvict)
+}
+
+// resetStats resets all stats to zero
+func (db *DB) resetStats() error {
+	// Reset to zero values
+	stats := &types.Stats{
+		FileCount:      0,
+		FolderCount:    0,
+		TotalFileSize:  0,
+		SecondaryNodes: make(map[string]int64),
+	}
+
+	// Initialize secondary nodes map for each secondary world
+	for _, worldName := range db.secondaryTables {
+		stats.SecondaryNodes[worldName] = 0
+	}
+
+	return db.setStats(stats)
 }
 
 // Note: ParentInfo and GetParentInfo removed - replaced by GetParentAndChildren for better performance
 
 // BulkInsertNodes inserts multiple nodes in a single BoltDB transaction
 func (db *DB) BulkInsertNodes(nodes []*types.Node) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	if len(nodes) == 0 {
 		return nil
 	}
 
-	// Track which nodes were actually inserted (not skipped)
-	insertedNodes := make([]*types.Node, 0, len(nodes))
+	// Add to output buffer
+	op := &BulkInsertNodeOperation{Nodes: nodes}
+	db.outputBuffer.Add(op)
 
-	err := db.db.Update(func(tx *bbolt.Tx) error {
-		nodesBucket := tx.Bucket([]byte(bucketNodes))
-		if nodesBucket == nil {
-			return fmt.Errorf("[SpectraFS] nodes bucket does not exist")
-		}
-
-		indexParentID := tx.Bucket([]byte(bucketIndexParentID))
-		if indexParentID == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_id bucket does not exist")
-		}
-
-		indexPath := tx.Bucket([]byte(bucketIndexPath))
-		if indexPath == nil {
-			return fmt.Errorf("[SpectraFS] index_path bucket does not exist")
-		}
-
-		indexParentPath := tx.Bucket([]byte(bucketIndexParentPath))
-		if indexParentPath == nil {
-			return fmt.Errorf("[SpectraFS] index_parent_path bucket does not exist")
-		}
-
-		// Insert all nodes
+	// Queue stats updates (async, non-blocking)
+	if db.statsBuffer != nil {
 		for _, node := range nodes {
-			// Check if node already exists (INSERT OR IGNORE behavior)
-			existingData := nodesBucket.Get([]byte(node.ID))
-			if existingData != nil {
-				continue // Skip if node already exists
-			}
-
-			// Serialize node to JSON
-			nodeJSON, err := json.Marshal(node)
-			if err != nil {
-				return fmt.Errorf("[SpectraFS] failed to marshal node %s: %w", node.ID, err)
-			}
-
-			// Store node in nodes bucket
-			if err := nodesBucket.Put([]byte(node.ID), nodeJSON); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to insert node %s: %w", node.ID, err)
-			}
-
-			// Update index_parent_id: key format "{parentID}|{nodeID}"
-			parentIDKey := fmt.Sprintf("%s|%s", node.ParentID, node.ID)
-			if err := indexParentID.Put([]byte(parentIDKey), []byte{}); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to update parent_id index for node %s: %w", node.ID, err)
-			}
-
-			// Update index_path: key format "{path}" -> value "{nodeID}"
-			if err := indexPath.Put([]byte(node.Path), []byte(node.ID)); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to update path index for node %s: %w", node.ID, err)
-			}
-
-			// Update index_parent_path: key format "{parentPath}|{nodeID}"
-			parentPathKey := fmt.Sprintf("%s|%s", node.ParentPath, node.ID)
-			if err := indexParentPath.Put([]byte(parentPathKey), []byte{}); err != nil {
-				return fmt.Errorf("[SpectraFS] failed to update parent_path index for node %s: %w", node.ID, err)
-			}
-
-			// Track this node as inserted
-			insertedNodes = append(insertedNodes, node)
-		}
-
-		return nil
-	})
-
-	// Update stats after successful bulk insertion
-	if err == nil {
-		for _, node := range insertedNodes {
-			if err := db.updateStatsForNode(node, true); err != nil {
-				// Log error but don't fail the bulk insertion
-				// Stats update failure shouldn't prevent node insertion
-				_ = err
-			}
+			db.statsBuffer.queueUpdate(node, true)
 		}
 	}
 
-	return err
+	return nil
 }
 
 // GetNodeByPath retrieves a node by its path, optionally filtering by world
 func (db *DB) GetNodeByPath(path, world string) (*types.Node, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	var node *types.Node
+	// First, get the nodeID from the path index so we can flush pending operations
+	// BoltDB handles its own read locking
+	var nodeID string
 	err := db.db.View(func(tx *bbolt.Tx) error {
-		// Use index_path bucket to get nodeID from path
 		indexPath := tx.Bucket([]byte(bucketIndexPath))
 		if indexPath == nil {
 			return fmt.Errorf("[SpectraFS] index_path bucket does not exist")
 		}
-
 		nodeIDBytes := indexPath.Get([]byte(path))
 		if nodeIDBytes == nil {
 			return fmt.Errorf("[SpectraFS] node not found with path %s", path)
 		}
+		nodeID = string(nodeIDBytes)
+		return nil
+	})
 
-		nodeID := string(nodeIDBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Flush buffer if this node has pending writes
+	db.Flush(nodeID)
+
+	// Now do the full read (BoltDB handles its own read locking)
+	var node *types.Node
+	err = db.db.View(func(tx *bbolt.Tx) error {
 
 		// Get node from nodes bucket
 		nodesBucket := tx.Bucket([]byte(bucketNodes))

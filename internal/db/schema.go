@@ -9,7 +9,6 @@ import (
 // Bucket names for BoltDB storage
 const (
 	bucketNodes           = "nodes"
-	bucketIndexParentID   = "index_parent_id"
 	bucketIndexPath       = "index_path"
 	bucketIndexParentPath = "index_parent_path"
 	bucketStats           = "stats"
@@ -25,10 +24,6 @@ func InitializeBuckets(db *bbolt.DB) error {
 		}
 
 		// Create index buckets
-		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIndexParentID)); err != nil {
-			return fmt.Errorf("failed to create index_parent_id bucket: %w", err)
-		}
-
 		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIndexPath)); err != nil {
 			return fmt.Errorf("failed to create index_path bucket: %w", err)
 		}
@@ -52,7 +47,6 @@ func VerifyBucketsExist(db *bbolt.DB) error {
 	return db.View(func(tx *bbolt.Tx) error {
 		requiredBuckets := []string{
 			bucketNodes,
-			bucketIndexParentID,
 			bucketIndexPath,
 			bucketIndexParentPath,
 			bucketStats,

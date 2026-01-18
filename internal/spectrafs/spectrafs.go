@@ -13,7 +13,7 @@ import (
 	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
 	"github.com/Project-Sylos/Spectra/internal/types"
 	"github.com/Project-Sylos/Spectra/internal/utils"
-	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 )
 
 // SpectraFS represents the main filesystem simulator with multi-table support
@@ -26,22 +26,30 @@ type SpectraFS struct {
 
 // NewSpectraFS creates a new SpectraFS instance with multi-table support
 func NewSpectraFS(configPath string) (*SpectraFS, error) {
+	fmt.Println("Initializing SpectraFS with config path: ", configPath)
 	// Load configuration
 	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	fmt.Println("Config loaded successfully")
+
+	fmt.Println("Initializing database...")
 
 	// Initialize database with secondary tables
 	// Note: InitializeSchema() already creates root nodes automatically
-	database, err := db.New(cfg.Seed.DBPath, cfg.SecondaryTables)
+	database, err := db.New(cfg.Seed.DBPath, cfg.SecondaryTables, cfg.Seed.EnableCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
+	fmt.Println("Database initialized successfully")
 
+	fmt.Println("Initializing seeded random number generator...")
 	// Initialize seeded random number generator
 	rng := generator.NewRNG(cfg.Seed.Seed)
+	fmt.Println("Seeded random number generator initialized successfully")
 
+	fmt.Println("Creating SpectraFS instance...")
 	return &SpectraFS{
 		root: "root",
 		db:   database,
@@ -114,6 +122,14 @@ func (s *SpectraFS) ListChildren(req models.ParentIdentifier) (*types.ListResult
 				Message: fmt.Sprintf("Failed to bulk insert nodes: %v", err),
 			}, nil
 		}
+
+		// Add generated children to cache (if cache is enabled)
+		for _, child := range generated {
+			s.db.AddToCache(child)
+		}
+
+		// Safe eviction: flush before evicting nodes
+		s.db.EvictOldGenerations()
 
 		// Filter children by requested world
 		for _, node := range generated {
@@ -225,8 +241,8 @@ func (s *SpectraFS) CreateFolder(req interface {
 		return nil, fmt.Errorf("parent %s is not a folder", parent.ID)
 	}
 
-	// Create folder node with UUID
-	nodeID := uuid.New().String()
+	// Create folder node with ULID
+	nodeID := ulid.Make().String()
 	path := utils.JoinPath(parent.Path, req.GetName())
 
 	// Roll dice for existence in each world - ensure all worlds have keys
@@ -296,8 +312,8 @@ func (s *SpectraFS) UploadFile(req interface {
 		return nil, fmt.Errorf("parent %s is not a folder", parent.ID)
 	}
 
-	// Generate UUID for the new file
-	nodeID := uuid.New().String()
+	// Generate ULID for the new file
+	nodeID := ulid.Make().String()
 	path := utils.JoinPath(parent.Path, req.GetName())
 
 	// Generate deterministic file data metadata (data itself is not persisted)
@@ -415,6 +431,14 @@ func (s *SpectraFS) GetStats() (*types.Stats, error) {
 	return s.db.GetStats()
 }
 
+// FlushStats forces an immediate flush of the stats buffer
+// Useful before reading stats to ensure all updates are processed
+func (s *SpectraFS) FlushStats() {
+	if s.db != nil {
+		s.db.FlushStats()
+	}
+}
+
 // resolveNodeAndWorld resolves a node and world from a request using interfaces
 // Supports both NodeIdentifier (for ID or Path+World) and ParentIdentifier (for ParentID or ParentPath+World)
 // Returns the node and the world name (defaults to "primary" if not specified)
@@ -468,7 +492,11 @@ func (s *SpectraFS) resolveNodeAndWorld(req any) (*types.Node, string, error) {
 
 // getFileDataDeterministic generates deterministic file data using the configured binary seed
 // This ensures every retrieval returns the same data, satisfying tools that rely on stable content
-func (s *SpectraFS) getFileDataDeterministic(nodeID string) ([]byte, string, error) {
+// This may seem weird to require a nodeID but not use it. But it's because the
+// file data is generated based on the seed ID which is static anyways.
+// We just want to replicate what it might look like from the user to get the
+// file data to simulate a mock file system more accurately from the call location.
+func (s *SpectraFS) getFileDataDeterministic(_ string) ([]byte, string, error) {
 	return generator.GenerateDeterministicFileData(s.cfg.Seed.FileBinarySeed)
 }
 

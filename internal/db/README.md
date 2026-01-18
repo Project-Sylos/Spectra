@@ -19,9 +19,12 @@ db/
 - Optimized for minimal database round trips
 
 ### Index Buckets
-- `index_parent_id`: Key format `{parentID}|{nodeID}` for efficient parent-child lookups
 - `index_path`: Key format `{path}` → value `{nodeID}` for path-based lookups
 - `index_parent_path`: Key format `{parentPath}|{nodeID}` for parent path queries
+
+### Parent-Child Relationships
+- Each node maintains a `ChildIDs []string` array of direct children
+- O(1) lookup time for retrieving children (no bucket scanning required)
 
 ### World-Based Filtering
 - Nodes are filtered by world in Go code after deserialization
@@ -46,8 +49,8 @@ db/
 - `BulkInsertNodes(nodes)` - Insert multiple nodes in one transaction
 
 ### Children Operations
-- `GetChildrenByParentID(parentID, world)` - Get children filtered by world using index_parent_id
-- `GetParentAndChildren(parentID, world)` - Get parent + children in ONE operation (optimized)
+- `GetChildrenByParentID(parentID, world)` - Get children filtered by world using parent's ChildIDs array
+- `GetParentAndChildren(parentID, world)` - Get parent + children in ONE operation (O(1) per child)
 - `CheckChildrenExist(parentID, world)` - Check if parent has children in world
 
 ### System Operations
@@ -61,11 +64,7 @@ db/
 
 ### `nodes` Bucket
 - **Key**: Node ID (UUID string)
-- **Value**: JSON-serialized `types.Node` struct
-
-### `index_parent_id` Bucket
-- **Key**: `{parentID}|{nodeID}` (e.g., `"root|abc-123"`)
-- **Value**: Empty (key contains all information)
+- **Value**: JSON-serialized `types.Node` struct (includes ChildIDs array)
 
 ### `index_path` Bucket
 - **Key**: Node path (e.g., `"/folder/file.txt"`)
@@ -92,23 +91,28 @@ type Node struct {
     LastUpdated  time.Time       // Synthetic timestamp
     Checksum     *string         // SHA256 checksum (NULL for folders)
     ExistenceMap map[string]bool // JSON: {"primary": true, "s1": true, "s2": false}
+    ChildIDs     []string        // Array of child node IDs (O(1) lookup)
 }
 ```
 
 ## Performance Optimizations
 
-### Vectorized Queries
-The `GetParentAndChildren` method fetches both parent and all children efficiently:
-1. Fetch parent node by ID from `nodes` bucket
-2. Use `index_parent_id` bucket with prefix scan to find all children
-3. Filter by world in Go after deserialization
-4. Sort results (parent first, then by type and name)
+### O(1) Parent-Child Lookups
+The `GetParentAndChildren` method fetches both parent and all children using direct lookups:
+1. Fetch parent node by ID from `nodes` bucket (O(1))
+2. Read parent's `ChildIDs` array
+3. Fetch each child by ID from `nodes` bucket (O(1) per child)
+4. Filter by world in Go after deserialization
+5. Sort results (parent first, then by type and name)
 
-### Index Prefix Scans
-Parent-child queries use efficient prefix scans on `index_parent_id`:
-- Prefix: `{parentID}|`
-- All keys starting with this prefix represent children of that parent
-- BoltDB's ordered key structure makes this very efficient
+**Performance**: O(c) where c = number of children, vs. O(n) prefix scanning where n = total nodes
+
+### ChildIDs Array Maintenance
+Parent-child relationships are maintained in the parent node's `ChildIDs` array:
+- Insert operations append to parent's ChildIDs
+- Delete operations remove from parent's ChildIDs
+- No separate index bucket required
+- Atomic updates within node write transactions
 
 ### Bulk Operations
 `BulkInsertNodes` performs all inserts in a single BoltDB transaction:
