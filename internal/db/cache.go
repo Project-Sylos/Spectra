@@ -3,7 +3,7 @@ package db
 import (
 	"sync"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
 // NodeCache provides a thread-safe cache for nodes with sliding window eviction

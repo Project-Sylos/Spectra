@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net/http"
 
-	apimodels "github.com/Project-Sylos/Spectra/internal/api/models"
-	spectrafsmodels "github.com/Project-Sylos/Spectra/internal/spectrafs/models"
-	"github.com/Project-Sylos/Spectra/internal/types"
-	"github.com/Project-Sylos/Spectra/sdk"
+	apimodels "codeberg.org/Sylos/Spectra/internal/api/models"
+	spectrafsmodels "codeberg.org/Sylos/Spectra/internal/spectrafs/models"
+	"codeberg.org/Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/sdk"
 	"github.com/go-chi/chi/v5"
 )
 

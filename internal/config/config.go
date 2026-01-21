@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
 // DefaultConfig returns a default configuration with new structure

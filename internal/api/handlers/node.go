@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	spectrafsmodels "github.com/Project-Sylos/Spectra/internal/spectrafs/models"
-	"github.com/Project-Sylos/Spectra/sdk"
+	spectrafsmodels "codeberg.org/Sylos/Spectra/internal/spectrafs/models"
+	"codeberg.org/Sylos/Spectra/sdk"
 	"github.com/go-chi/chi/v5"
 )
 

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
-	"github.com/Project-Sylos/Spectra/internal/utils"
+	"codeberg.org/Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/utils"
 	"github.com/oklog/ulid/v2"
 )
 

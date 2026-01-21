@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
-	"github.com/Project-Sylos/Spectra/sdk"
+	"codeberg.org/Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/sdk"
 	"github.com/go-chi/chi/v5"
 )
 

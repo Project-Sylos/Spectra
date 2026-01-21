@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Project-Sylos/Spectra/internal/api"
-	"github.com/Project-Sylos/Spectra/sdk"
+	"codeberg.org/Sylos/Spectra/internal/api"
+	"codeberg.org/Sylos/Spectra/sdk"
 )
 
 func main() {

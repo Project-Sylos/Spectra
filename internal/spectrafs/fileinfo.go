@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
 // nodeFileInfo wraps a types.Node to implement fs.FileInfo

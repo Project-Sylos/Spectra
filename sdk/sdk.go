@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/Project-Sylos/Spectra/internal/spectrafs"
-	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/spectrafs"
+	"codeberg.org/Sylos/Spectra/internal/spectrafs/models"
+	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
 // SpectraFS is the public SDK interface for the synthetic filesystem

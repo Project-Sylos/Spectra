@@ -1,6 +1,6 @@
-module github.com/Project-Sylos/Spectra
+module codeberg.org/Sylos/Spectra
 
-go 1.24.2
+go 1.25.6
 
 require (
 	github.com/go-chi/chi/v5 v5.2.3

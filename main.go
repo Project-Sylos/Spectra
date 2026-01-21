@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Project-Sylos/Spectra/sdk"
+	"codeberg.org/Sylos/Spectra/sdk"
 )
 
 func main() {

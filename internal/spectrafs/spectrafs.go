@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Project-Sylos/Spectra/internal/config"
-	"github.com/Project-Sylos/Spectra/internal/db"
-	"github.com/Project-Sylos/Spectra/internal/generator"
-	"github.com/Project-Sylos/Spectra/internal/spectrafs/models"
-	"github.com/Project-Sylos/Spectra/internal/types"
-	"github.com/Project-Sylos/Spectra/internal/utils"
+	"codeberg.org/Sylos/Spectra/internal/config"
+	"codeberg.org/Sylos/Spectra/internal/db"
+	"codeberg.org/Sylos/Spectra/internal/generator"
+	"codeberg.org/Sylos/Spectra/internal/spectrafs/models"
+	"codeberg.org/Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/utils"
 	"github.com/oklog/ulid/v2"
 )
 

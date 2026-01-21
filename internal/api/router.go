@@ -1,9 +1,9 @@
 package api
 
 import (
-	"github.com/Project-Sylos/Spectra/internal/api/handlers"
-	apimiddleware "github.com/Project-Sylos/Spectra/internal/api/middleware"
-	"github.com/Project-Sylos/Spectra/sdk"
+	"codeberg.org/Sylos/Spectra/internal/api/handlers"
+	apimiddleware "codeberg.org/Sylos/Spectra/internal/api/middleware"
+	"codeberg.org/Sylos/Spectra/sdk"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )

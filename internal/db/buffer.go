@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/types"
 	"go.etcd.io/bbolt"
 )
 

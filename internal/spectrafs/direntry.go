@@ -3,7 +3,7 @@ package spectrafs
 import (
 	"io/fs"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
 // nodeDirEntry wraps a types.Node to implement fs.DirEntry

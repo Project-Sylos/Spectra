@@ -4,7 +4,7 @@ import (
 	"io"
 	"io/fs"
 
-	"github.com/Project-Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
 // spectraFile implements fs.File for regular files
