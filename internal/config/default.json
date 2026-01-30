@@ -1,4 +1,5 @@
 {
+  "mode": "persistent",
   "seed": {
     "max_depth": 4,
     "max_folders": 100,

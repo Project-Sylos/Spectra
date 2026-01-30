@@ -44,6 +44,7 @@ func (h *ItemHandler) ListItems(w http.ResponseWriter, req *http.Request) {
 		ParentID:   apiRequest.ParentID,
 		ParentPath: apiRequest.ParentPath,
 		TableName:  apiRequest.TableName,
+		Depth:      apiRequest.Depth,
 	}
 
 	result, err := h.fs.ListChildren(spectrafsRequest)

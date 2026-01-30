@@ -4,22 +4,67 @@ import (
 	"fmt"
 	"io/fs"
 
+	"codeberg.org/Sylos/Spectra/internal/config"
+	"codeberg.org/Sylos/Spectra/internal/ephemeralfs"
 	"codeberg.org/Sylos/Spectra/internal/spectrafs"
 	"codeberg.org/Sylos/Spectra/internal/spectrafs/models"
 	"codeberg.org/Sylos/Spectra/internal/types"
 )
 
+// fsInterface defines the common interface for both persistent and ephemeral implementations
+type fsInterface interface {
+	ListChildren(req models.ParentIdentifier) (*types.ListResult, error)
+	GetNode(req models.NodeIdentifier) (*types.Node, error)
+	GetFileData(id string) ([]byte, string, error)
+	CreateFolder(req interface {
+		models.ParentIdentifier
+		models.NamedRequest
+	}) (*types.Node, error)
+	UploadFile(req interface {
+		models.ParentIdentifier
+		models.NamedRequest
+		models.DataRequest
+	}) (*types.Node, error)
+	DeleteNode(req models.NodeIdentifier) error
+	Reset() error
+	Close() error
+	GetConfig() *types.Config
+	GetNodeCount(world string) (int, error)
+	GetTableInfo() ([]types.TableInfo, error)
+	GetSecondaryTables() []string
+	GetStats() (*types.Stats, error)
+	FlushStats()
+}
+
 // SpectraFS is the public SDK interface for the synthetic filesystem
 // This wraps the internal implementation to provide a clean public API
 type SpectraFS struct {
-	impl *spectrafs.SpectraFS
+	impl fsInterface
 }
 
 // New creates a new SpectraFS instance using the specified config file
+// The implementation (persistent or ephemeral) is selected based on the config mode
 func New(configPath string) (*SpectraFS, error) {
-	impl, err := spectrafs.NewSpectraFS(configPath)
+	// Load configuration to determine mode
+	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize SpectraFS: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	var impl fsInterface
+
+	// Select implementation based on mode
+	if cfg.Mode == "ephemeral" {
+		impl, err = ephemeralfs.NewEphemeralFS(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize EphemeralFS: %w", err)
+		}
+	} else {
+		// Default to persistent mode
+		impl, err = spectrafs.NewSpectraFS(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize SpectraFS: %w", err)
+		}
 	}
 
 	return &SpectraFS{
@@ -96,6 +141,11 @@ func (s *SpectraFS) GetStats() (*Stats, error) {
 	return s.impl.GetStats()
 }
 
+// FlushStats forces an immediate flush of the stats buffer
+func (s *SpectraFS) FlushStats() {
+	s.impl.FlushStats()
+}
+
 // DeleteNode deletes a node using either ID or Path+World
 func (s *SpectraFS) DeleteNode(req *models.DeleteNodeRequest) error {
 	return s.impl.DeleteNode(req)
@@ -135,8 +185,15 @@ const (
 // AsFS returns an fs.FS instance bound to a specific world
 // This allows SpectraFS to be used with tools like Rclone
 // Each world is projected as its own separate filesystem
+// Note: Currently only supported for persistent mode
 func (s *SpectraFS) AsFS(world string) fs.FS {
-	return spectrafs.NewSpectraFSWrapper(s.impl, world)
+	// Type assert to check if it's persistent mode
+	if persistentImpl, ok := s.impl.(*spectrafs.SpectraFS); ok {
+		return spectrafs.NewSpectraFSWrapper(persistentImpl, world)
+	}
+	// For ephemeral mode, return nil or a no-op wrapper
+	// TODO: Implement ephemeral fs.FS wrapper if needed
+	return nil
 }
 
 // AsFSWithDefaults returns an fs.FS instance using the "primary" world

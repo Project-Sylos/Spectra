@@ -12,6 +12,7 @@ import (
 // DefaultConfig returns a default configuration with new structure
 func DefaultConfig() types.Config {
 	return types.Config{
+		Mode: "persistent",
 		Seed: types.SeedConfig{
 			MaxDepth:               4,
 			MaxFolders:             100,
@@ -59,18 +60,25 @@ func LoadFromFile(configPath string) (*types.Config, error) {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
-	// Set default DB path if not specified
-	if cfg.Seed.DBPath == "" {
-		cfg.Seed.DBPath = "./spectra.db"
+	// Set default mode if not specified
+	if cfg.Mode == "" {
+		cfg.Mode = "persistent"
 	}
 
-	// Ensure DB path is absolute
-	if !filepath.IsAbs(cfg.Seed.DBPath) {
-		absPath, err := filepath.Abs(cfg.Seed.DBPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve DB path: %w", err)
+	// Set default DB path if not specified (only for persistent mode)
+	if cfg.Mode == "persistent" {
+		if cfg.Seed.DBPath == "" {
+			cfg.Seed.DBPath = "./spectra.db"
 		}
-		cfg.Seed.DBPath = absPath
+
+		// Ensure DB path is absolute
+		if !filepath.IsAbs(cfg.Seed.DBPath) {
+			absPath, err := filepath.Abs(cfg.Seed.DBPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve DB path: %w", err)
+			}
+			cfg.Seed.DBPath = absPath
+		}
 	}
 
 	// Set default API config if not specified
@@ -88,6 +96,14 @@ func LoadFromFile(configPath string) (*types.Config, error) {
 func Validate(cfg *types.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
+	}
+
+	// Validate mode
+	if cfg.Mode == "" {
+		cfg.Mode = "persistent" // Default to persistent
+	}
+	if cfg.Mode != "persistent" && cfg.Mode != "ephemeral" {
+		return fmt.Errorf("mode must be either 'persistent' or 'ephemeral', got %s", cfg.Mode)
 	}
 
 	// Validate seed config

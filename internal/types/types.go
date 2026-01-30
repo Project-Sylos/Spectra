@@ -6,6 +6,7 @@ import (
 
 // Config represents the complete configuration for Spectra
 type Config struct {
+	Mode            string             `json:"mode"`             // "persistent" or "ephemeral"
 	Seed            SeedConfig         `json:"seed"`
 	API             APIConfig          `json:"api"`
 	SecondaryTables map[string]float64 `json:"secondary_tables"`

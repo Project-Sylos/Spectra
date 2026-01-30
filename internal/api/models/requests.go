@@ -6,6 +6,7 @@ type ListChildrenRequest struct {
 	ParentID   string `json:"parent_id,omitempty"`   // Parent node ID
 	ParentPath string `json:"parent_path,omitempty"` // Parent node path
 	TableName  string `json:"table_name,omitempty"`  // Required when using ParentPath
+	Depth      *int   `json:"depth,omitempty"`       // Required for ephemeral mode
 }
 
 // CreateFolderRequest represents the request to create a new folder
