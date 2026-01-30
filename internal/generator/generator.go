@@ -9,7 +9,6 @@ import (
 
 	"codeberg.org/Sylos/Spectra/internal/types"
 	"codeberg.org/Sylos/Spectra/internal/utils"
-	"github.com/oklog/ulid/v2"
 )
 
 // RNG wraps math/rand.Rand for seeded random generation with thread-safety
@@ -165,13 +164,11 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	return children, nil
 }
 
-// generateFolder creates a new folder node with ULID and ExistenceMap
+// generateFolder creates a new folder node with deterministic ID and ExistenceMap
 func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("folder_%d", index)
-	path := utils.JoinPath(parent.Path, name)
-
-	// Generate ULID for the node
-	nodeID := ulid.Make().String()
+	pathStr := utils.JoinPath(parent.Path, name)
+	nodeID := utils.DeterministicNodeID(pathStr, types.NodeTypeFolder)
 
 	// Create existence map - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
@@ -195,7 +192,7 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 		ID:           nodeID,
 		ParentID:     parent.ID,
 		Name:         name,
-		Path:         path,
+		Path:         pathStr,
 		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFolder,
 		DepthLevel:   depth,
@@ -206,13 +203,11 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 	}, nil
 }
 
-// generateFile creates a new file node with ULID and ExistenceMap
+// generateFile creates a new file node with deterministic ID and ExistenceMap
 func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
 	name := fmt.Sprintf("file_%d.txt", index)
-	path := utils.JoinPath(parent.Path, name)
-
-	// Generate ULID for the node
-	nodeID := ulid.Make().String()
+	pathStr := utils.JoinPath(parent.Path, name)
+	nodeID := utils.DeterministicNodeID(pathStr, types.NodeTypeFile)
 
 	// Generate file data and checksum deterministically so repeated reads always
 	// return identical content, regardless of node identity
@@ -243,7 +238,7 @@ func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, r
 		ID:           nodeID,
 		ParentID:     parent.ID,
 		Name:         name,
-		Path:         path,
+		Path:         pathStr,
 		ParentPath:   parent.Path,
 		Type:         types.NodeTypeFile,
 		DepthLevel:   depth,

@@ -259,7 +259,7 @@ Spectra represents all nodes as entries in a unified BoltDB key-value store:
 | `last_updated`       | timestamp | Synthetic timestamp                                        |
 | `checksum`           | string    | SHA256 checksum (for files only)                           |
 | `existence_map`      | JSON      | Map tracking world existence: `{"primary":true,"s1":true}` |
-| `child_ids`          | JSON      | Array of direct child node IDs: `["ulid1","ulid2",...]`   |
+| `child_ids`          | JSON      | Array of direct child node IDs: `["root","spc:...",...]`  |
 
 ### Example Behavior
 

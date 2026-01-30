@@ -3,7 +3,6 @@ package ephemeralfs
 import (
 	"encoding/binary"
 	"fmt"
-	"hash"
 	"hash/fnv"
 	"path"
 	"time"
@@ -11,7 +10,7 @@ import (
 	"codeberg.org/Sylos/Spectra/internal/generator"
 	"codeberg.org/Sylos/Spectra/internal/spectrafs/models"
 	"codeberg.org/Sylos/Spectra/internal/types"
-	"github.com/oklog/ulid/v2"
+	"codeberg.org/Sylos/Spectra/internal/utils"
 )
 
 // EphemeralFS is a stateless, deterministic filesystem emulator.
@@ -43,13 +42,6 @@ func deterministicSeed(globalSeed int64, pathStr string, depth int) int64 {
 	binary.LittleEndian.PutUint64(buf[:], uint64(depth))
 	_, _ = h.Write(buf[:])
 	return int64(h.Sum64())
-}
-
-// deterministicParentID returns a stable string ID for a path when ParentID is not provided.
-func deterministicParentID(pathStr string) string {
-	var h hash.Hash64 = fnv.New64a()
-	_, _ = h.Write([]byte(pathStr))
-	return fmt.Sprintf("ephemeral:%016x", h.Sum64())
 }
 
 // buildFullExistenceMap creates an existence map with all worlds set to true
@@ -107,7 +99,7 @@ func (e *EphemeralFS) ListChildren(req models.ParentIdentifier) (*types.ListResu
 	parentPath := path.Dir(pathStr)
 	parentID := req.GetParentID()
 	if parentID == "" {
-		parentID = deterministicParentID(pathStr)
+		parentID = utils.DeterministicNodeID(pathStr, types.NodeTypeFolder)
 	}
 	parent := &types.Node{
 		ID:           parentID,
@@ -228,15 +220,19 @@ func (e *EphemeralFS) CreateFolder(req interface {
 		return nil, fmt.Errorf("name is required")
 	}
 
-	// Generate ULID for the new folder
-	nodeID := ulid.Make().String()
+	parentPath := req.GetParentPath()
+	if parentPath == "" {
+		parentPath = "/"
+	}
+	pathStr := utils.JoinPath(parentPath, req.GetName())
+	nodeID := utils.DeterministicNodeID(pathStr, types.NodeTypeFolder)
 
 	folderNode := &types.Node{
 		ID:           nodeID,
 		ParentID:     req.GetParentID(),
 		Name:         req.GetName(),
-		Path:         "/",
-		ParentPath:   "/",
+		Path:         pathStr,
+		ParentPath:   parentPath,
 		Type:         types.NodeTypeFolder,
 		DepthLevel:   0,
 		Size:         0,
@@ -264,8 +260,12 @@ func (e *EphemeralFS) UploadFile(req interface {
 		return nil, fmt.Errorf("data is required")
 	}
 
-	// Generate ULID for the new file
-	nodeID := ulid.Make().String()
+	parentPath := req.GetParentPath()
+	if parentPath == "" {
+		parentPath = "/"
+	}
+	pathStr := utils.JoinPath(parentPath, req.GetName())
+	nodeID := utils.DeterministicNodeID(pathStr, types.NodeTypeFile)
 
 	// Generate deterministic file data metadata
 	data, checksum, err := generator.GenerateDeterministicFileData(e.cfg.Seed.FileBinarySeed)
@@ -277,8 +277,8 @@ func (e *EphemeralFS) UploadFile(req interface {
 		ID:           nodeID,
 		ParentID:     req.GetParentID(),
 		Name:         req.GetName(),
-		Path:         "/",
-		ParentPath:   "/",
+		Path:         pathStr,
+		ParentPath:   parentPath,
 		Type:         types.NodeTypeFile,
 		DepthLevel:   0,
 		Size:         int64(len(data)),
