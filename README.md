@@ -6,7 +6,7 @@
 
 ## Overview
 
-Spectra behaves like a mock filesystem. Instead of relying on actual disk I/O, it **procedurally generates** folders and files based on configuration parameters (min/max depth, file counts, folder counts, etc.). Each generated node is **persisted to an embedded BoltDB database** with multi-world support, enabling reproducible state across test runs.
+Spectra behaves like a mock filesystem. Instead of relying on actual disk I/O, it **procedurally generates** folders and files from configuration (depth, fanout, seed). You can run it in **persistent** mode (BoltDB-backed, lazy generation) or **ephemeral** mode (no DB; children generated on the fly from path and depth). Both modes use deterministic node IDs and multi-world support for reproducible tests.
 
 This design allows engineers to stress-test migration engines (such as Sylos) without interacting with real file systems or cloud APIs.
 
@@ -21,9 +21,9 @@ This design allows engineers to stress-test migration engines (such as Sylos) wi
    - Old: `"min_folders": 1, "max_folders": 3`
    - New: `"max_folders": 100, "folder_backoff_factor": 0.5, "folder_depth_decay_factor": 0.8`
 
-2. **Node Identifiers**: Migrated from UUID to ULID (time-ordered, sortable)
-   - Existing databases incompatible (delete and regenerate)
-   - New IDs are 26-character base32 strings
+2. **Node Identifiers**: Deterministic IDs (no UUID/ULID)
+   - Root folder: `"root"`; all other nodes: `"spc:"` + 32-char hex (FNV128a of path and type)
+   - Same path and type yield the same ID across all worlds; existing DBs with old IDs need regeneration
 
 3. **Database API** (Breaking): `db.New()` and `db.Flush()` signatures changed
    - `db.New()` now requires `enableCache bool` parameter
@@ -54,7 +54,7 @@ See [`INTEGRATION_GUIDE.md`](INTEGRATION_GUIDE.md) for detailed migration instru
 * **BoltDB Persistence:** Each node is stored in a local BoltDB key-value database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out distribution, file size ranges, and naming schemes through the config file or API.
 * **Instant Cleanup:** Simple teardown between tests — delete the BoltDB database file and regenerate.
-* **ULID Identifiers:** Lexicographically sortable, time-ordered unique identifiers for efficient indexing.
+* **Deterministic Node IDs:** Stable IDs from path and type (`root` or `spc:` + hex); world-agnostic and reproducible.
 * **Optimized Queries:** Vectorized queries reduce database round trips by 3-4x.
 * **Write-Ahead Buffering:** Batched write operations with ordered insert/update queues for high throughput.
 * **Optional Node Cache:** Sliding window cache reduces DB reads by ~66% during BFS traversal (opt-in).
@@ -67,7 +67,7 @@ See [`INTEGRATION_GUIDE.md`](INTEGRATION_GUIDE.md) for detailed migration instru
 
 Spectra uses an optimized single-bucket architecture for maximum performance:
 
-- **Unified `nodes` Bucket**: All nodes stored in one bucket with ULID keys (time-ordered, sortable)
+- **Unified `nodes` Bucket**: All nodes stored in one bucket with string keys (`root` or `spc:` + hex, deterministic from path and type)
 - **Existence Map**: JSON field tracking which "worlds" (primary, s1, s2, etc.) each node exists in
 - **Direct Child References**: Each node stores `child_ids` array for O(1) children retrieval
 - **Index Buckets**: Separate buckets for efficient lookups by path and parent_path
@@ -91,6 +91,12 @@ The system filters nodes by "world" context:
 - Operations can specify target world (s1, s2, etc.)
 - Nodes can exist in multiple worlds simultaneously
 - Traversal status tracked independently per world
+
+### Persistent vs Ephemeral Mode
+
+Config **mode** selects the implementation:
+- **Persistent** (default): BoltDB-backed; lazy generation; write-ahead buffer and optional cache; fs.FS support. ListChildren by parent ID or path+world; depth optional.
+- **Ephemeral**: No database; children generated on the fly from path and depth. ListChildren **requires** parent_path and depth. Optional **diverging_tree_mode** seeds with world//path so each world gets a different tree shape. Ideal for traversal/copy tests without persistence.
 
 ### Internal Architecture & Performance
 
@@ -173,29 +179,15 @@ Realistic filesystem generation using weighted logarithmic buckets:
   - Same seed = same distribution every time
   - Predictable for testing and benchmarking
 
-#### ULID Identifiers
+#### Deterministic Node IDs
 
-Spectra uses ULIDs (Universally Unique Lexicographically Sortable Identifiers) instead of traditional UUIDs:
+Spectra uses deterministic string IDs (no UUIDs or ULIDs):
 
-- **Time-Ordered**: First 48 bits encode timestamp (millisecond precision)
-  - Nodes created earlier sort before nodes created later
-  - Natural ordering for BFS traversal and chronological queries
-  
-- **Lexicographically Sortable**: Can be sorted as strings
-  - Efficient range scans in BoltDB
-  - No need to parse or convert for comparisons
+- **Root**: The root folder always has ID `"root"`.
+- **All other nodes**: `"spc:"` + 32-character hex from FNV128a(path, type). Same path and type yield the same ID in every world and every run.
+- **World-agnostic**: IDs do not encode world name, so the same logical path in primary and s1 has the same ID (enables overlap and copy semantics).
 
-- **Entropy**: 80 random bits after timestamp
-  - Collision-resistant (same guarantees as UUID v4)
-  - Suitable for distributed systems
-
-- **Compact**: 26-character base32 encoding
-  - Shorter than UUID string representation (36 chars)
-  - Case-insensitive, URL-safe
-
-**Example ULID**: `01KF7H2JPPRWH60QWW0ZHRCNE6`
-- First 10 chars: timestamp
-- Last 16 chars: randomness
+**Example IDs**: `root`, `spc:a1b2c3d4e5f6...`
 
 ---
 
@@ -206,7 +198,7 @@ Spectra uses ULIDs (Universally Unique Lexicographically Sortable Identifiers) i
 | **Go (Golang)**                                                  | Core implementation language                                    |
 | **BoltDB**                                                       | Lightweight embedded key-value database for node persistence    |
 | **Chi Router**                                                   | HTTP router for RESTful API endpoints                           |
-| **ULID**                                                         | Lexicographically sortable unique identifiers (time-ordered)    |
+| **Deterministic IDs**                                            | `root` or `spc:` + FNV128a hex (path + type)                    |
 | **Go's `math/rand`**                                             | Deterministic random generation with seeding                    |
 | **Go standard library (`os`, `path/filepath`, `time`, `io/fs`)** | Utility functions, path normalization, and filesystem interface |
 
@@ -217,26 +209,20 @@ Spectra uses ULIDs (Universally Unique Lexicographically Sortable Identifiers) i
 ```
 Spectra/
 ├── cmd/                       # Command-line applications
-│   └── api/                   # API server application
-│       └── main.go           # HTTP API server entry point
-├── configs/                   # Configuration files
-│   └── default.json          # Default configuration
+│   └── api/                   # API server (uses sdk.New; mode from config)
+│       └── main.go
 ├── internal/                  # Internal implementation
-│   ├── api/                  # HTTP API layer
-│   │   ├── handlers/         # Endpoint handlers
-│   │   ├── middleware/       # HTTP middleware
-│   │   ├── models/           # Request/response models
-│   │   ├── router.go         # Route configuration
-│   │   └── server.go         # HTTP server
-│   ├── config/               # Configuration management
-│   ├── db/                   # Database layer
-│   ├── generator/            # Procedural generation
-│   ├── spectrafs/            # Core filesystem logic
-│   └── types/                # Type definitions
-├── sdk/                      # Public SDK interface
-├── dev_setup_scripts/        # Development setup scripts
-├── main.go                   # SDK demo application
-└── go.mod                    # Go module definition
+│   ├── api/                  # HTTP API layer (handlers, middleware, router, server)
+│   ├── config/               # Configuration load/validate/defaults (mode, seed, api)
+│   ├── db/                   # BoltDB persistence, buffer, cache (persistent mode only)
+│   ├── ephemeralfs/          # Stateless on-the-fly implementation (ephemeral mode)
+│   ├── generator/            # Procedural generation (shared by both modes)
+│   ├── spectrafs/            # Persistent filesystem implementation + fs.FS
+│   ├── types/                # Config, Node, ListResult, etc.
+│   └── utils/                # Path joining, deterministic node IDs
+├── sdk/                      # Public SDK; New() picks spectrafs or ephemeralfs by config mode
+├── main.go                   # SDK demo
+└── go.mod
 ```
 
 ---
@@ -249,8 +235,8 @@ Spectra represents all nodes as entries in a unified BoltDB key-value store:
 
 | Column               | Type      | Description                                                |
 | -------------------- | --------- | --------------------------------------------------------   |
-| `id`                 | string    | ULID identifier (lexicographically sortable, time-ordered) |
-| `parent_id`          | string    | ULID of parent folder                                      |
+| `id`                 | string    | `root` or `spc:` + hex (deterministic from path and type)   |
+| `parent_id`          | string    | Parent node ID (`root` or `spc:...`)                       |
 | `name`               | string    | Display name                                               |
 | `path`               | string    | Relative path (root-relative, not absolute)                |
 | `type`               | string    | `"folder"` or `"file"`                                     |
@@ -351,7 +337,7 @@ All CRUD operations use simple request structs that support flexible lookup meth
 
 **GetNodeRequest** - Retrieve a node by ID or Path+World
 ```go
-// By ID (ULID)
+// By ID
 req := &sdk.GetNodeRequest{
     ID: "root",
 }
@@ -365,7 +351,7 @@ node, err := fs.GetNode(req)
 
 **ListChildrenRequest** - List children of a parent node
 ```go
-// By ParentID (ULID)
+// By ParentID
 req := &sdk.ListChildrenRequest{
     ParentID: "root",
 }
@@ -400,7 +386,7 @@ file, err := fs.UploadFile(req)
 **DeleteNodeRequest** - Delete a node
 ```go
 req := &sdk.DeleteNodeRequest{
-    ID: "01KF7H2JPPRWH60QWW0ZHRCNE6",  // ULID
+    ID: "root",  // or spc:...
 }
 err := fs.DeleteNode(req)
 ```
@@ -527,7 +513,7 @@ Spectra is designed for high-throughput synthetic filesystem operations:
 - **Typical Throughput**: 50K-100K+ nodes/second on consumer hardware (M1/M2, modern x64)
 
 ### Read Performance
-- **O(1) Node Lookups**: Direct read via ULID key
+- **O(1) Node Lookups**: Direct read by node ID
 - **O(1) Children Retrieval**: Single parent read + `ChildIDs` array (no index scan)
 - **Optional Cache**: ~66% reduction in DB reads during BFS (3-generation window)
 - **Vectorized Queries**: Bulk operations reduce DB round trips by 3-4x

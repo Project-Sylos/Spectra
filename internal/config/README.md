@@ -1,89 +1,79 @@
 # Config Package
 
-The config package handles configuration management for Spectra, including loading, validating, and providing default configurations.
+The config package handles configuration management for Spectra: loading from JSON, validation, and default values. It supports both persistent (DB-backed) and ephemeral (no persistence) modes.
 
 ## Structure
 
 ```
 config/
-└── config.go  # Configuration loading, validation, and defaults
+├── config.go     # LoadFromFile, DefaultConfig, Validate, SaveToFile
+└── default.json  # Default configuration (mode, seed, api, secondary_tables)
 ```
 
 ## Core Features
 
-- **Multi-Section Configuration**: Supports seed, API, and secondary table configurations
-- **Validation**: Comprehensive validation of configuration parameters
-- **Default Values**: Sensible defaults for all configuration options
-- **File Loading**: JSON configuration file loading with error handling
+- **Mode**: Top-level `mode` — `"persistent"` (default) or `"ephemeral"`. Drives which filesystem implementation the SDK uses.
+- **Validation**: Mode, seed bounds, backoff/decay ranges, API port, secondary table probabilities.
+- **Defaults**: Sensible defaults for all options; DB path resolved to absolute in persistent mode.
+- **File loading**: JSON config with error handling; missing mode defaults to persistent.
 
 ## Configuration Sections
 
-### Seed Configuration
-Controls procedural generation parameters:
-- `max_depth` - Maximum tree depth (default: 4)
-- `min_folders` / `max_folders` - Folder count range (default: 1-3)
-- `min_files` / `max_files` - File count range (default: 2-5)
-- `seed` - Random number generator seed (default: 42)
-- `db_path` - Database file path (default: "./spectra.db")
+### Top-level
+- `mode` (string) – `"persistent"` or `"ephemeral"`. Default: `"persistent"`.
 
-### API Configuration
-Controls HTTP server settings:
-- `host` - Server host (default: "localhost")
-- `port` - Server port (default: 8086)
+### Seed configuration (`seed`)
+- `max_depth` – Maximum tree depth (default: 4).
+- `max_folders` – Max folder fanout; weighted distribution (default: 100).
+- `folder_backoff_factor` – Exponent for folder bucket weights (default: 0.5).
+- `folder_depth_decay_factor` – Depth decay for folder count (default: 0.8).
+- `max_files` – Max file fanout (default: 100).
+- `file_backoff_factor`, `file_depth_decay_factor` – Same for files (defaults: 0.5, 0.85).
+- `seed` – RNG seed (default: 42).
+- `db_path` – BoltDB path (default: `"./spectra.db"`; used only in persistent mode).
+- `file_binary_seed` – Seed for deterministic file content (default: 0).
+- `enable_cache` – Enable node cache in persistent mode (default: false).
+- `diverging_tree_mode` – Ephemeral only: seed with `world//path` so each world gets a different tree (default: false).
 
-### Secondary Tables Configuration
-Defines secondary table probabilities:
-- `s1`, `s2`, etc. - Table names with probability values (0.0-1.0)
+### API configuration (`api`)
+- `host` – Server host (default: `"localhost"`).
+- `port` – Server port (default: 8086).
+
+### Secondary tables (`secondary_tables`)
+- Map of world name → probability (0.0–1.0), e.g. `"s1": 0.7`, `"s2": 0.3`.
 
 ## Core Functions
 
-### Configuration Loading
-- `LoadFromFile(path)` - Load configuration from JSON file
-- `DefaultConfig()` - Get default configuration
-- `SaveToFile(config, path)` - Save configuration to file
-
-### Validation
-- `Validate(config)` - Validate configuration parameters
-- Checks for valid ranges, required fields, and data types
-- Validates secondary table probabilities (0.0-1.0)
-- Validates API port range (1-65535)
+- **LoadFromFile(path)** – Load and validate config from JSON; set mode default, resolve DB path for persistent mode.
+- **DefaultConfig()** – Return default `types.Config` (persistent mode, seed 42, etc.).
+- **Validate(cfg)** – Validate mode, seed params, API port, secondary probabilities.
+- **SaveToFile(cfg, path)** – Write config to JSON.
 
 ## Example Configuration
 
+See `default.json` for the full structure. Minimal example:
+
 ```json
 {
+  "mode": "persistent",
   "seed": {
     "max_depth": 4,
-    "min_folders": 1,
-    "max_folders": 3,
-    "min_files": 2,
-    "max_files": 5,
+    "max_folders": 100,
+    "folder_backoff_factor": 0.5,
+    "folder_depth_decay_factor": 0.8,
+    "max_files": 100,
+    "file_backoff_factor": 0.5,
+    "file_depth_decay_factor": 0.85,
     "seed": 42,
-    "db_path": "./spectra.db"
+    "db_path": "./spectra.db",
+    "enable_cache": false,
+    "diverging_tree_mode": false
   },
-  "api": {
-    "host": "localhost",
-    "port": 8086
-  },
-  "secondary_tables": {
-    "s1": 0.7,
-    "s2": 0.3
-  }
+  "api": { "host": "localhost", "port": 8086 },
+  "secondary_tables": { "s1": 0.7 }
 }
 ```
 
 ## Usage
 
-The config package is used throughout the application to provide consistent configuration management. It's used by the main application, SpectraFS, and API layers.
-
-## Error Handling
-
-Comprehensive error handling for:
-- File not found errors
-- JSON parsing errors
-- Validation errors
-- Invalid parameter ranges
-
-## Default Behavior
-
-If no configuration file is provided, the application uses sensible defaults that allow it to run immediately without setup.
+Used by the SDK (to choose implementation and pass config), SpectraFS (persistent), EphemeralFS (ephemeral), and the API server.
