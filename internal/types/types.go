@@ -25,6 +25,10 @@ type SeedConfig struct {
 	DBPath                 string  `json:"db_path"`
 	FileBinarySeed         int64   `json:"file_binary_seed,omitempty"`
 	EnableCache            bool    `json:"enable_cache"`
+	// DivergingTreeMode (ephemeral only): seed child generation with worldName//path
+	// instead of path alone, so each world gets a different tree shape (e.g. for copy tests).
+	// Default false: same path in any world yields same children (identical trees).
+	DivergingTreeMode bool `json:"diverging_tree_mode,omitempty"`
 }
 
 // APIConfig represents the HTTP API configuration

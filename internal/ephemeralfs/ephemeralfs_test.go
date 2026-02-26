@@ -157,3 +157,38 @@ func TestListChildren_RequiresPathAndDepth(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+func TestListChildren_DivergingTreeMode(t *testing.T) {
+	// With DivergingTreeMode false: same path in any world → same children (identical trees).
+	cfgOff := testConfig()
+	cfgOff.Seed.DivergingTreeMode = false
+	fsOff, _ := NewEphemeralFS(cfgOff)
+	depth := 1
+	reqPrimary := &models.ListChildrenRequest{ParentPath: "/", TableName: "primary", Depth: &depth}
+	reqS1 := &models.ListChildrenRequest{ParentPath: "/", TableName: "s1", Depth: &depth}
+	rPrimary, _ := fsOff.ListChildren(reqPrimary)
+	rS1, _ := fsOff.ListChildren(reqS1)
+	if !rPrimary.Success || !rS1.Success {
+		t.Fatalf("ListChildren failed: %s / %s", rPrimary.Message, rS1.Message)
+	}
+	fpOffP := stableFingerprint(rPrimary)
+	fpOffS := stableFingerprint(rS1)
+	if fpOffP != fpOffS {
+		t.Errorf("with DivergingTreeMode false, same path in different worlds should yield same children; got different fingerprints")
+	}
+
+	// With DivergingTreeMode true: same path in different worlds → different children (diverging trees).
+	cfgOn := testConfig()
+	cfgOn.Seed.DivergingTreeMode = true
+	fsOn, _ := NewEphemeralFS(cfgOn)
+	rPrimary2, _ := fsOn.ListChildren(reqPrimary)
+	rS1_2, _ := fsOn.ListChildren(reqS1)
+	if !rPrimary2.Success || !rS1_2.Success {
+		t.Fatalf("ListChildren failed: %s / %s", rPrimary2.Message, rS1_2.Message)
+	}
+	fpOnP := stableFingerprint(rPrimary2)
+	fpOnS := stableFingerprint(rS1_2)
+	if fpOnP == fpOnS {
+		t.Errorf("with DivergingTreeMode true, same path in different worlds (primary vs s1) should yield different children; got identical fingerprints")
+	}
+}

@@ -116,8 +116,15 @@ func (e *EphemeralFS) ListChildren(req models.ParentIdentifier) (*types.ListResu
 		ChildIDs:     nil,
 	}
 
-	// Derive deterministic RNG seed from (global seed, path, depth); fresh RNG per call
-	seed := deterministicSeed(e.cfg.Seed.Seed, pathStr, depth)
+	// Derive deterministic RNG seed from (global seed, effectivePath, depth); fresh RNG per call.
+	// In diverging-tree mode, use worldName//path so each world gets a different tree shape.
+	effectivePath := pathStr
+	if e.cfg.Seed.DivergingTreeMode {
+		if world := req.GetTableName(); world != "" {
+			effectivePath = world + "//" + pathStr
+		}
+	}
+	seed := deterministicSeed(e.cfg.Seed.Seed, effectivePath, depth)
 	rng := generator.NewRNG(seed)
 
 	// Generate children using shared generator (no shared mutable RNG)

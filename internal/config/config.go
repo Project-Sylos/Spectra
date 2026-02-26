@@ -25,6 +25,7 @@ func DefaultConfig() types.Config {
 			DBPath:                 "./spectra.db",
 			FileBinarySeed:         0,
 			EnableCache:            false,
+			DivergingTreeMode:      false,
 		},
 		API: types.APIConfig{
 			Host: "localhost",
