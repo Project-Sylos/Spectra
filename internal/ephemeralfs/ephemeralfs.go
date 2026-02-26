@@ -116,18 +116,19 @@ func (e *EphemeralFS) ListChildren(req models.ParentIdentifier) (*types.ListResu
 		ChildIDs:     nil,
 	}
 
-	// Derive deterministic RNG seed from (global seed, effectivePath, depth); fresh RNG per call.
-	// In diverging-tree mode, use worldName//path so each world gets a different tree shape.
-	effectivePath := pathStr
+	// Seed key: only used for RNG seeding so tree shape can differ per world. Never used for Node.Path.
+	// In diverging-tree mode we use worldName//path as the seed key; all returned nodes still have
+	// normal paths (e.g. /foo/bar), so overlap checks across worlds see the same path space.
+	seedKey := pathStr
 	if e.cfg.Seed.DivergingTreeMode {
 		if world := req.GetTableName(); world != "" {
-			effectivePath = world + "//" + pathStr
+			seedKey = world + "//" + pathStr
 		}
 	}
-	seed := deterministicSeed(e.cfg.Seed.Seed, effectivePath, depth)
+	seed := deterministicSeed(e.cfg.Seed.Seed, seedKey, depth)
 	rng := generator.NewRNG(seed)
 
-	// Generate children using shared generator (no shared mutable RNG)
+	// Generate children using shared generator (no shared mutable RNG). parent.Path is unchanged.
 	generated, err := generator.GenerateChildren(parent, depth, rng, e.cfg)
 	if err != nil {
 		return &types.ListResult{
@@ -136,7 +137,10 @@ func (e *EphemeralFS) ListChildren(req models.ParentIdentifier) (*types.ListResu
 		}, nil
 	}
 
-	// Separate folders and files
+	// Separate folders and files. In ephemeral mode, the list is for a specific world (table);
+	// ensure every returned child is marked as existing in that world so callers that filter
+	// by ExistenceMap[world] don't end up with 0 children due to RNG rolls.
+	requestWorld := req.GetTableName()
 	result := &types.ListResult{
 		Success: true,
 		Message: "Children generated successfully",
@@ -145,6 +149,9 @@ func (e *EphemeralFS) ListChildren(req models.ParentIdentifier) (*types.ListResu
 	}
 
 	for _, child := range generated {
+		if requestWorld != "" && child.ExistenceMap != nil {
+			child.ExistenceMap[requestWorld] = true
+		}
 		switch child.Type {
 		case types.NodeTypeFolder:
 			result.Folders = append(result.Folders, types.Folder{Node: *child})
