@@ -7,17 +7,17 @@
     "max_files": 100,
     "file_backoff_factor": 0.5,
     "file_depth_decay_factor": 0.85,
-    "seed": 42,
+    "seed": 40,
     "db_path": "./spectra.db",
     "file_binary_seed": 0,
-    "enable_cache": false
+    "enable_cache": false,
+    "diverging_tree_mode": true
   },
   "api": {
     "host": "localhost",
     "port": 8086
   },
   "secondary_tables": {
-    "s1": 0.7,
-    "s2": 0.3
+    "s1": 0.7
   }
 }

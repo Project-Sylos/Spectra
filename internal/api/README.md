@@ -22,12 +22,11 @@ api/
 
 ## Design Principles
 
+- **SDK-backed**: The server uses `sdk.New(configPath)` so implementation is chosen by config `mode` (persistent or ephemeral). Same routes work for both.
 - **Modular Handlers**: Each handler focuses on a specific domain (items, node, system)
 - **Base Handler**: Common functionality shared across all handlers
-- **Middleware Support**: Extensible middleware system for cross-cutting concerns
-- **Type Safety**: Strongly typed request/response models
-- **Error Handling**: Consistent error responses with proper HTTP status codes
-- **Request Model Conversion**: API models are converted to spectrafs request models for processing
+- **Request Model Conversion**: API request models (including `depth` for list-children) are passed through to spectrafs/ephemeralfs request models
+- **Error Handling**: Consistent JSON error responses with appropriate HTTP status codes
 
 ## Handlers
 
@@ -60,11 +59,12 @@ type ListChildrenRequest struct {
     TableName  string `json:"table_name,omitempty"`
 }
 
-// Converted to spectrafs request model
+// Converted to spectrafs/ephemeralfs request model (Depth required for ephemeral mode)
 spectrafsRequest := &spectrafsmodels.ListChildrenRequest{
     ParentID:   apiRequest.ParentID,
     ParentPath: apiRequest.ParentPath,
     TableName:  apiRequest.TableName,
+    Depth:      apiRequest.Depth,
 }
 ```
 

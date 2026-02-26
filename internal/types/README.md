@@ -1,111 +1,49 @@
 # Types Package
 
-The types package defines all data structures and type definitions used throughout Spectra. It provides the core data models for nodes, configuration, and API responses.
+The types package defines shared data structures and constants used across Spectra: configuration, nodes, list results, and API responses. Used by config, db, generator, spectrafs, ephemeralfs, API, and SDK.
 
 ## Structure
 
 ```
 types/
-└── types.go  # All type definitions and helper functions
+└── types.go   # Config, SeedConfig, APIConfig, Node, Folder, File, ListResult, TableInfo, Stats, constants
 ```
 
 ## Core Types
 
+### Config
+- **Mode** – `"persistent"` or `"ephemeral"` (drives SDK implementation choice).
+- **Seed** – SeedConfig (generation and DB/cache options).
+- **API** – Host and port.
+- **SecondaryTables** – map[world]probability (e.g. `"s1": 0.7`).
+
+### SeedConfig
+- **MaxDepth**, **MaxFolders**, **MaxFiles** – Depth and fanout limits.
+- **FolderBackoffFactor**, **FolderDepthDecayFactor** (and file variants) – Weighted distribution and depth decay.
+- **Seed** – RNG seed.
+- **DBPath**, **FileBinarySeed**, **EnableCache** – DB path, deterministic file seed, optional cache.
+- **DivergingTreeMode** – Ephemeral only: seed with world//path for per-world tree shape.
+
 ### Node
-The fundamental data structure representing filesystem nodes:
+- **ID** – `"root"` or `spc:` + hex (deterministic from path and type).
+- **ParentID**, **Name**, **Path**, **ParentPath**, **Type** (`folder`/`file`), **DepthLevel**, **Size**, **LastUpdated**, **Checksum**, **ExistenceMap**, **ChildIDs**.
 
-```go
-type Node struct {
-    ID                string            `json:"id" db:"id"`
-    ParentID          string            `json:"parent_id" db:"parent_id"`
-    Name              string            `json:"name" db:"name"`
-    Path              string            `json:"path" db:"path"`
-    Type              string            `json:"type" db:"type"`
-    DepthLevel        int               `json:"depth_level" db:"depth_level"`
-    Size              int64             `json:"size" db:"size"`
-    LastUpdated       time.Time         `json:"last_updated" db:"last_updated"`
-    Checksum          *string           `json:"checksum" db:"checksum"`
-    ExistenceMap      map[string]bool   `json:"existence_map" db:"existence_map"`
-}
-```
+### ListResult
+- **Success**, **Message** – Result status.
+- **Folders** – `[]Folder` (each embeds Node).
+- **Files** – `[]File` (each embeds Node).
 
-**Key Changes:**
-- `ID` is now a plain UUID (no prefixes like `p-` or `s1-`)
-- `ExistenceMap` tracks which worlds the node exists in (e.g., `{"primary": true, "s1": true}`)
-
-### Configuration
-Multi-section configuration structure:
-
-```go
-type Config struct {
-    SeedConfig
-    API            APIConfig
-    SecondaryTables map[string]float64
-}
-
-type SeedConfig struct {
-    MaxDepth    int    `json:"max_depth"`
-    MinFolders  int    `json:"min_folders"`
-    MaxFolders  int    `json:"max_folders"`
-    MinFiles    int    `json:"min_files"`
-    MaxFiles    int    `json:"max_files"`
-    Seed        int64  `json:"seed"`
-    DBPath      string `json:"db_path"`
-}
-
-type APIConfig struct {
-    Host string `json:"host"`
-    Port int    `json:"port"`
-}
-```
-
-### API Responses
-Standardized API response structures:
-
-```go
-type APIResponse struct {
-    Success bool        `json:"success"`
-    Message string      `json:"message"`
-    Data    any `json:"data,omitempty"`
-}
-
-type ListResult struct {
-    Success bool     `json:"success"`
-    Message string   `json:"message"`
-    Folders []*Node  `json:"folders"`
-    Files   []*Node  `json:"files"`
-}
-```
+### Other
+- **APIResponse** – Success, Message, Data.
+- **TableInfo** – Name, RowCount, TableType.
+- **Stats** – FileCount, FolderCount, TotalFileSize, SecondaryNodes.
 
 ## Constants
 
-### Node Types
-- `NodeTypeFolder` - "folder"
-- `NodeTypeFile` - "file"
-
-### Traversal Status
-- `StatusPending` - "pending"
-- `StatusSuccessful` - "successful"
-- `StatusFailed` - "failed"
-
-### Copy Status
-- `CopyStatusPending` - "pending"
-- `CopyStatusInProgress` - "in_progress"
-- `CopyStatusCompleted` - "completed"
-
-## Helper Functions
-
-### World Management
-- `GetTableName(world)` - Always returns "nodes" (single bucket architecture, kept for API compatibility)
+- **NodeTypeFolder**, **NodeTypeFile**
+- **StatusPending**, **StatusSuccessful**, **StatusFailed**
+- **CopyStatusPending**, **CopyStatusInProgress**, **CopyStatusCompleted**
 
 ## Usage
 
-The types package is used throughout the application to ensure type safety and consistency. All data structures are defined here and used across the database, API, and SDK layers.
-
-## JSON Tags
-
-All types include JSON tags for API serialization and database tags for BoltDB operations. This ensures consistent data representation across all layers.
-
-## Validation
-
-Types include validation logic where appropriate, particularly for configuration validation and ID format checking.
+Imported by all internal packages and re-exported by the SDK. JSON and db tags align with API and BoltDB usage.

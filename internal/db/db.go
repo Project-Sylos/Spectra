@@ -10,7 +10,6 @@ import (
 
 	"codeberg.org/Sylos/Spectra/internal/types"
 	"codeberg.org/Sylos/Spectra/internal/utils"
-	"github.com/oklog/ulid/v2"
 	"go.etcd.io/bbolt"
 )
 
@@ -620,9 +619,6 @@ func (db *DB) GetTableInfo() ([]types.TableInfo, error) {
 
 // CreateFolder creates a new folder node
 func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error) {
-	// Generate ULID for the new folder
-	nodeID := ulid.Make().String()
-
 	// Get parent node to determine path (BoltDB handles its own read locking)
 	var parentPath string
 	err := db.db.View(func(tx *bbolt.Tx) error {
@@ -650,6 +646,7 @@ func (db *DB) CreateFolder(parentID, name string, depth int) (*types.Node, error
 	}
 
 	path := utils.JoinPath(parentPath, name)
+	nodeID := utils.DeterministicNodeID(path, types.NodeTypeFolder)
 
 	folderNode := &types.Node{
 		ID:           nodeID,

@@ -147,24 +147,27 @@ req := &models.GetNodeRequest{
 
 ### ListChildrenRequest
 
-List children of a parent node with lazy generation.
+List children of a parent node. In persistent mode lazy generation uses depth from DB; in ephemeral mode **depth is required** (parent_path + depth drive generation).
 
 **Implements:** `ParentIdentifier`
 
 **Fields:**
 - `ParentID` (string): Direct parent node ID
 - `ParentPath` (string): Parent node path
-- `TableName` (string): Table name (required when using ParentPath)
+- `TableName` (string): Table name / world (required when using ParentPath)
+- `Depth` (*int): Depth level for generation. Required in ephemeral mode; optional in persistent mode.
 
 **Examples:**
 ```go
-// By ParentID
+// By ParentID (persistent)
 req := &models.ListChildrenRequest{ParentID: "root"}
 
-// By ParentPath
+// By ParentPath + Depth (ephemeral requires both)
+depth := 1
 req := &models.ListChildrenRequest{
     ParentPath: "/",
     TableName:  "primary",
+    Depth:      &depth,
 }
 ```
 
@@ -241,7 +244,7 @@ Delete a node by ID or Path+TableName.
 **Examples:**
 ```go
 // By ID
-req := &models.DeleteNodeRequest{ID: "p-abc123"}
+req := &models.DeleteNodeRequest{ID: "root"}
 
 // By Path
 req := &models.DeleteNodeRequest{
@@ -266,7 +269,7 @@ Update the traversal status of a node.
 ```go
 // By ID
 req := &models.UpdateTraversalStatusRequest{
-    ID:     "p-abc123",
+    ID:     "root",
     Status: "successful",
 }
 

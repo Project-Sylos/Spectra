@@ -13,7 +13,6 @@ import (
 	"codeberg.org/Sylos/Spectra/internal/spectrafs/models"
 	"codeberg.org/Sylos/Spectra/internal/types"
 	"codeberg.org/Sylos/Spectra/internal/utils"
-	"github.com/oklog/ulid/v2"
 )
 
 // SpectraFS represents the main filesystem simulator with multi-table support
@@ -241,9 +240,8 @@ func (s *SpectraFS) CreateFolder(req interface {
 		return nil, fmt.Errorf("parent %s is not a folder", parent.ID)
 	}
 
-	// Create folder node with ULID
-	nodeID := ulid.Make().String()
 	path := utils.JoinPath(parent.Path, req.GetName())
+	nodeID := utils.DeterministicNodeID(path, types.NodeTypeFolder)
 
 	// Roll dice for existence in each world - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
@@ -312,9 +310,8 @@ func (s *SpectraFS) UploadFile(req interface {
 		return nil, fmt.Errorf("parent %s is not a folder", parent.ID)
 	}
 
-	// Generate ULID for the new file
-	nodeID := ulid.Make().String()
 	path := utils.JoinPath(parent.Path, req.GetName())
+	nodeID := utils.DeterministicNodeID(path, types.NodeTypeFile)
 
 	// Generate deterministic file data metadata (data itself is not persisted)
 	data, checksum, err := generator.GenerateDeterministicFileData(s.cfg.Seed.FileBinarySeed)

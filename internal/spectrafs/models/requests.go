@@ -32,11 +32,14 @@ func (r *GetNodeRequest) GetTableName() string { return r.TableName }
 // If ParentID is provided, ParentPath and TableName are ignored.
 // If ParentPath is provided, TableName is required.
 //
+// Depth is optional for persistent mode (DB tracks state) but required for ephemeral mode.
+//
 // This struct implements ParentIdentifier.
 type ListChildrenRequest struct {
 	ParentID   string `json:"parent_id,omitempty"`
 	ParentPath string `json:"parent_path,omitempty"`
 	TableName  string `json:"table_name,omitempty"`
+	Depth      *int   `json:"depth,omitempty"`
 }
 
 // GetParentID implements ParentIdentifier

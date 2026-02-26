@@ -12,18 +12,24 @@ sdk/
 ## Design Principles
 
 - **Stable API**: Public interface that won't change without version bumps
-- **Clean Abstraction**: Hides internal implementation details
+- **Implementation-agnostic**: Callers use the same API whether running persistent or ephemeral; the SDK chooses implementation from config
 - **Type Safety**: Strongly typed interface with proper error handling
-- **Comprehensive Coverage**: Exposes all necessary functionality
+
+## Initialization and Mode
+
+- **New(configPath)** loads config and selects implementation by **mode**:
+  - `mode: "persistent"` (default) → SpectraFS (BoltDB, lazy generation, fs.FS support)
+  - `mode: "ephemeral"` → EphemeralFS (no DB, on-the-fly generation; ListChildren requires **depth** and parent_path)
+- **NewWithDefaults()** calls New with `"configs/default.json"`.
 
 ## Core Interface
 
 ### SpectraFS
-The main SDK interface that provides all filesystem operations:
+The public SDK struct that delegates to the selected implementation (SpectraFS or EphemeralFS):
 
 ```go
 type SpectraFS struct {
-    impl *spectrafs.SpectraFS
+    impl fsInterface  // *spectrafs.SpectraFS or *ephemeralfs.EphemeralFS
 }
 ```
 
@@ -36,8 +42,7 @@ type SpectraFS struct {
 - `DeleteNode(req *DeleteNodeRequest)` - Delete node by ID or Path+TableName
 
 #### Children Operations
-- `ListChildren(req *ListChildrenRequest)` - List children with lazy generation (supports ID or Path+TableName lookup)
-- `CheckChildrenExist(parentID)` - Check if children exist
+- `ListChildren(req *ListChildrenRequest)` - List children. In ephemeral mode **depth** and **parent_path** (or parent_id) are required; in persistent mode lazy generation uses DB state.
 
 #### System Operations
 - `Reset()` - Clear all nodes and recreate root
@@ -52,8 +57,8 @@ type SpectraFS struct {
 - `UpdateTraversalStatus(req *UpdateTraversalStatusRequest)` - Update node traversal status (supports ID or Path+TableName lookup)
 
 #### fs.FS Interface Operations
-- `AsFS(world string) fs.FS` - Returns an `fs.FS` instance bound to a specific world for compatibility with Go standard library and tools like Rclone
-- `AsFSWithDefaults() fs.FS` - Returns an `fs.FS` instance using the "primary" world (convenience method)
+- `AsFS(world string) fs.FS` - Returns an `fs.FS` instance bound to a specific world. **Only supported in persistent mode**; returns nil in ephemeral mode.
+- `AsFSWithDefaults() fs.FS` - Same as AsFS("primary")
 
 ## Type Re-exports
 
@@ -98,17 +103,13 @@ The request structs use a simple struct literal syntax - no embedding or complex
 
 ### Initialization
 ```go
-// Load configuration
-config, err := config.LoadFromFile("configs/default.json")
+// Create SpectraFS instance (implementation chosen by config mode)
+fs, err := sdk.New("configs/default.json")
 if err != nil {
     log.Fatal(err)
 }
-
-// Create SpectraFS instance
-fs, err := sdk.NewSpectraFS(config)
-if err != nil {
-    log.Fatal(err)
-}
+// Or with default config path
+fs, err := sdk.NewWithDefaults()
 ```
 
 ### Basic Operations

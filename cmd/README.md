@@ -20,7 +20,7 @@ The API server provides the HTTP interface for Spectra. It starts a web server t
 #### Usage
 
 ```bash
-# Use default configuration
+# Use default configuration (internal/config/default.json)
 go run cmd/api/main.go
 
 # Use custom configuration
