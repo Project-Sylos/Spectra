@@ -51,6 +51,7 @@ See [`INTEGRATION_GUIDE.md`](INTEGRATION_GUIDE.md) for detailed migration instru
 * **Unified Single-Bucket Architecture:** One bucket with world-based existence tracking for optimal performance.
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
 * **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone.
+* **FUSE Mount:** Mount Spectra worlds as local directories (Linux/macOS) for Finder, Explorer, and shell access with lazy generation.
 * **BoltDB Persistence:** Each node is stored in a local BoltDB key-value database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out distribution, file size ranges, and naming schemes through the config file or API.
 * **Instant Cleanup:** Simple teardown between tests — delete the BoltDB database file and regenerate.
@@ -438,6 +439,58 @@ go run cmd/api/main.go
 go run cmd/api/main.go configs/custom.json
 ```
 
+#### FUSE Mount (Linux / macOS)
+
+Mount Spectra worlds as real directories (similar to a cloud-drive mount). Requires FUSE on Linux (`fuse` package) or [macFUSE](https://osxfuse.github.io/) on macOS. Windows is not supported in v1.
+
+**In-process (default)** — uses the SDK directly, shares the same BoltDB:
+
+```bash
+# Mount with CLI overrides (primary required; s1 auto-derived if omitted)
+go run ./cmd/mount --mount primary:/tmp/spectra internal/config/default.json
+
+# Explicit multi-world mounts
+go run ./cmd/mount --mount primary:/tmp/spectra --mount s1:/tmp/spectra-s1 configs/custom.json
+
+# Mount + HTTP API for other tools
+go run ./cmd/mount --with-api internal/config/default.json
+```
+
+**Remote** — FUSE client talks to a running API server:
+
+```bash
+# Terminal 1: start API
+go run cmd/api/main.go
+
+# Terminal 2: mount via HTTP
+go run ./cmd/mount --remote http://localhost:8086 \
+  --mount primary:/tmp/spectra --mount s1:/tmp/spectra-s1
+```
+
+Configure mount paths in JSON (optional):
+
+```json
+"mount": {
+  "enabled": true,
+  "with_api": false,
+  "paths": {
+    "primary": "/mnt/spectra",
+    "s1": "/mnt/spectra-s1"
+  }
+}
+```
+
+Secondary worlds omitted from `paths` auto-derive as `{primary_path}-{world}` (e.g. `/mnt/spectra-s1`).
+
+**FUSE mount limitations:**
+
+- File **content** is generated on read; writes update metadata (size/name) only, not byte payloads.
+- Ephemeral mode: create/delete behave as in the SDK (non-persistent where applicable).
+- Remote mode adds latency per lookup; prefer in-process for local testing.
+- Do not execute binaries directly from the mount (go-fuse caveat); use a wrapper if needed.
+
+Uninstall on Linux: `fusermount -u /path/to/mount`
+
 ### Example API Calls
 
 #### List Children
@@ -476,13 +529,16 @@ Spectra uses BoltDB, a pure Go embedded database, so setup is lightweight:
 
    # Build API server
    go build -o bin/spectra-api cmd/api/main.go
+
+   # Build FUSE mount helper (Linux/macOS)
+   go build -o bin/spectra-mount cmd/mount/main.go
    ```
 
 ---
 
 ## Command-Line Applications
 
-Spectra provides two main command-line applications:
+Spectra provides three main command-line applications:
 
 ### SDK Demo (`main.go`)
 A demonstration application that showcases the Spectra SDK functionality:
@@ -499,6 +555,14 @@ A production-ready HTTP server that exposes the Spectra filesystem via RESTful A
 - Includes graceful shutdown and timeout handling
 - Supports CORS and proper error responses
 - Ideal for integration testing and production use
+
+### FUSE Mount (`cmd/mount/main.go`)
+Mounts Spectra worlds as OS-visible directories via FUSE:
+- In-process SDK backend (default) or remote HTTP backend (`--remote`)
+- Multi-world mounts: `primary` plus each `secondary_tables` entry
+- Optional co-located API server (`--with-api`)
+- Metadata writes (mkdir/create/delete); file bytes remain generated on read
+- Linux and macOS only (requires FUSE / macFUSE)
 
 ---
 

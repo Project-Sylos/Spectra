@@ -150,6 +150,44 @@ func Validate(cfg *types.Config) error {
 		}
 	}
 
+	if cfg.Mount != nil {
+		if err := validateMount(cfg); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateMount(cfg *types.Config) error {
+	if cfg.Mount == nil {
+		return nil
+	}
+	if !cfg.Mount.Enabled {
+		return nil
+	}
+	if len(cfg.Mount.Paths) == 0 {
+		return fmt.Errorf("mount.enabled is true but mount.paths is empty")
+	}
+	primary, ok := cfg.Mount.Paths["primary"]
+	if !ok || primary == "" {
+		return fmt.Errorf("mount.paths must include primary")
+	}
+	seen := map[string]string{}
+	for world, path := range cfg.Mount.Paths {
+		if path == "" {
+			return fmt.Errorf("mount path for world %s cannot be empty", world)
+		}
+		if other, exists := seen[path]; exists {
+			return fmt.Errorf("duplicate mount path %s for worlds %s and %s", path, other, world)
+		}
+		seen[path] = world
+		if world != "primary" {
+			if _, known := cfg.SecondaryTables[world]; !known {
+				return fmt.Errorf("mount path for unknown world %q (not in secondary_tables)", world)
+			}
+		}
+	}
 	return nil
 }
 

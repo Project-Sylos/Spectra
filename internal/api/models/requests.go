@@ -27,3 +27,16 @@ type UploadFileRequest struct {
 	Name       string `json:"name"`                  // Name of the file to upload
 	Data       []byte `json:"data"`                  // File content (base64 encoded in JSON)
 }
+
+// GetNodeRequest represents the request to get a node by ID or path
+type GetNodeRequest struct {
+	ID        string `json:"id,omitempty"`
+	Path      string `json:"path,omitempty"`
+	TableName string `json:"table_name,omitempty"`
+}
+
+// DeleteNodeRequest represents the request to delete a node by path
+type DeleteNodeRequest struct {
+	Path      string `json:"path,omitempty"`
+	TableName string `json:"table_name,omitempty"`
+}

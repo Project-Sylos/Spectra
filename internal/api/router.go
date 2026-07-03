@@ -46,6 +46,8 @@ func (r *Router) SetupRoutes() *chi.Mux {
 		// Item operations (files and folders)
 		api.Route("/items", func(items chi.Router) {
 			items.Post("/list", itemHandler.ListItems)
+			items.Post("/get", itemHandler.GetItem)
+			items.Post("/delete", itemHandler.DeleteItemByPath)
 			items.Post("/folder", itemHandler.CreateFolder)
 			items.Post("/file", itemHandler.UploadFile)
 			items.Get("/{id}", nodeHandler.GetNode) // Reuse node handler for getting item info

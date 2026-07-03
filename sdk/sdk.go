@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 
+	"codeberg.org/Sylos/Spectra/internal/chaos"
 	"codeberg.org/Sylos/Spectra/internal/config"
 	"codeberg.org/Sylos/Spectra/internal/ephemeralfs"
 	"codeberg.org/Sylos/Spectra/internal/spectrafs"
@@ -39,7 +40,8 @@ type fsInterface interface {
 // SpectraFS is the public SDK interface for the synthetic filesystem
 // This wraps the internal implementation to provide a clean public API
 type SpectraFS struct {
-	impl fsInterface
+	impl  fsInterface
+	chaos *chaos.Engine
 }
 
 // New creates a new SpectraFS instance using the specified config file
@@ -68,7 +70,8 @@ func New(configPath string) (*SpectraFS, error) {
 	}
 
 	return &SpectraFS{
-		impl: impl,
+		impl:  impl,
+		chaos: chaos.NewEngine(cfg.Chaos, cfg.Seed.Seed),
 	}, nil
 }
 
@@ -79,28 +82,54 @@ func NewWithDefaults() (*SpectraFS, error) {
 
 // ListChildren returns the children of a given parent node
 func (s *SpectraFS) ListChildren(req *models.ListChildrenRequest) (*types.ListResult, error) {
+	if err := s.beforeOp(chaos.EndpointListChildren, 0); err != nil {
+		return nil, err
+	}
 	return s.impl.ListChildren(req)
 }
 
 // GetNode retrieves a node using either ID or Path+TableName
 func (s *SpectraFS) GetNode(req *models.GetNodeRequest) (*types.Node, error) {
+	if err := s.beforeOp(chaos.EndpointGetNode, 0); err != nil {
+		return nil, err
+	}
 	return s.impl.GetNode(req)
 }
 
 // GetFileData generates and returns file data with checksum for a given file ID
 // The data is generated on-the-fly and not persisted
 func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
-	return s.impl.GetFileData(id)
+	if err := s.beforeOp(chaos.EndpointGetFileData, 0); err != nil {
+		return nil, "", err
+	}
+	data, sum, err := s.impl.GetFileData(id)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.afterOp(chaos.EndpointGetFileData, int64(len(data))); err != nil {
+		return nil, "", err
+	}
+	return data, sum, nil
 }
 
 // CreateFolder creates a new folder node
 func (s *SpectraFS) CreateFolder(req *models.CreateFolderRequest) (*types.Node, error) {
+	if err := s.beforeOp(chaos.EndpointCreateFolder, 0); err != nil {
+		return nil, err
+	}
 	return s.impl.CreateFolder(req)
 }
 
 // UploadFile handles file uploads - processes the data and creates a file node
 // The actual file data is not persisted, only metadata
 func (s *SpectraFS) UploadFile(req *models.UploadFileRequest) (*types.Node, error) {
+	var n int64
+	if req != nil {
+		n = int64(len(req.Data))
+	}
+	if err := s.beforeOp(chaos.EndpointUploadFile, n); err != nil {
+		return nil, err
+	}
 	return s.impl.UploadFile(req)
 }
 
@@ -200,4 +229,26 @@ func (s *SpectraFS) AsFS(world string) fs.FS {
 // This is a convenience method for the most common use case
 func (s *SpectraFS) AsFSWithDefaults() fs.FS {
 	return s.AsFS("primary")
+}
+
+func (s *SpectraFS) beforeOp(endpoint string, bytes int64) error {
+	if s == nil || s.chaos == nil {
+		return nil
+	}
+	return s.chaos.BeforeOperation(endpoint, bytes)
+}
+
+func (s *SpectraFS) afterOp(endpoint string, bytes int64) error {
+	if s == nil || s.chaos == nil {
+		return nil
+	}
+	return s.chaos.AfterOperation(endpoint, bytes)
+}
+
+// ChaosEngine returns the chaos engine for HTTP middleware wiring.
+func (s *SpectraFS) ChaosEngine() *chaos.Engine {
+	if s == nil {
+		return nil
+	}
+	return s.chaos
 }

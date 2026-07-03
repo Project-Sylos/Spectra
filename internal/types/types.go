@@ -10,6 +10,15 @@ type Config struct {
 	Seed            SeedConfig         `json:"seed"`
 	API             APIConfig          `json:"api"`
 	SecondaryTables map[string]float64 `json:"secondary_tables"`
+	Chaos           *ChaosConfig       `json:"chaos,omitempty"`
+	Mount           *MountConfig       `json:"mount,omitempty"`
+}
+
+// MountConfig configures FUSE mount points for Spectra worlds.
+type MountConfig struct {
+	Enabled  bool              `json:"enabled"`
+	WithAPI  bool              `json:"with_api"`
+	Paths    map[string]string `json:"paths"`
 }
 
 // SeedConfig represents the filesystem generation configuration

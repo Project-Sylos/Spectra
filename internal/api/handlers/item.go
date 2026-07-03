@@ -6,13 +6,12 @@ import (
 	"net/http"
 
 	apimodels "codeberg.org/Sylos/Spectra/internal/api/models"
+	"codeberg.org/Sylos/Spectra/internal/chaos"
 	spectrafsmodels "codeberg.org/Sylos/Spectra/internal/spectrafs/models"
 	"codeberg.org/Sylos/Spectra/internal/types"
 	"codeberg.org/Sylos/Spectra/sdk"
 	"github.com/go-chi/chi/v5"
 )
-
-// ItemHandler handles item-related endpoints (files and folders)
 type ItemHandler struct {
 	BaseHandler
 	fs *sdk.SpectraFS
@@ -49,6 +48,10 @@ func (h *ItemHandler) ListItems(w http.ResponseWriter, req *http.Request) {
 
 	result, err := h.fs.ListChildren(spectrafsRequest)
 	if err != nil {
+		if rl, ok := sdk.IsRateLimited(err); ok {
+			chaos.WriteRateLimitedResponse(w, rl)
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to list items: %v", err))
 		return
 	}
@@ -158,4 +161,62 @@ func (h *ItemHandler) GetFileData(w http.ResponseWriter, req *http.Request) {
 	}
 
 	h.sendSuccess(w, "File data retrieved successfully", response)
+}
+
+// GetItem handles path or ID based node lookup
+func (h *ItemHandler) GetItem(w http.ResponseWriter, req *http.Request) {
+	var apiRequest apimodels.GetNodeRequest
+	if err := json.NewDecoder(req.Body).Decode(&apiRequest); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if apiRequest.ID == "" && apiRequest.Path == "" {
+		h.sendError(w, http.StatusBadRequest, "either id or path is required")
+		return
+	}
+	if apiRequest.ID == "" && apiRequest.TableName == "" {
+		h.sendError(w, http.StatusBadRequest, "table_name is required when using path")
+		return
+	}
+
+	spectrafsRequest := &spectrafsmodels.GetNodeRequest{
+		ID:        apiRequest.ID,
+		Path:      apiRequest.Path,
+		TableName: apiRequest.TableName,
+	}
+
+	node, err := h.fs.GetNode(spectrafsRequest)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, fmt.Sprintf("Node not found: %v", err))
+		return
+	}
+
+	h.sendSuccess(w, "Node retrieved successfully", node)
+}
+
+// DeleteItemByPath handles deleting a node by path and table name
+func (h *ItemHandler) DeleteItemByPath(w http.ResponseWriter, req *http.Request) {
+	var apiRequest apimodels.DeleteNodeRequest
+	if err := json.NewDecoder(req.Body).Decode(&apiRequest); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if apiRequest.Path == "" || apiRequest.TableName == "" {
+		h.sendError(w, http.StatusBadRequest, "path and table_name are required")
+		return
+	}
+
+	deleteReq := &spectrafsmodels.DeleteNodeRequest{
+		Path:      apiRequest.Path,
+		TableName: apiRequest.TableName,
+	}
+
+	if err := h.fs.DeleteNode(deleteReq); err != nil {
+		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete node: %v", err))
+		return
+	}
+
+	h.sendSuccess(w, "Node deleted successfully", nil)
 }

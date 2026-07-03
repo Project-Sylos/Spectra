@@ -19,5 +19,12 @@
   },
   "secondary_tables": {
     "s1": 0.7
+  },
+  "mount": {
+    "enabled": false,
+    "with_api": false,
+    "paths": {
+      "primary": "/mnt/spectra"
+    }
   }
 }
