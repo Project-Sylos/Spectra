@@ -23,9 +23,8 @@ func DefaultConfig() types.Config {
 			FileDepthDecayFactor:   0.85,
 			Seed:                   42,
 			DBPath:                 "./spectra.db",
-			FileBinarySeed:         0,
-			EnableCache:            false,
-			DivergingTreeMode:      false,
+			FileBinarySeed:    0,
+			DivergingTreeMode: false,
 		},
 		API: types.APIConfig{
 			Host: "localhost",
@@ -153,6 +152,15 @@ func Validate(cfg *types.Config) error {
 	if cfg.Mount != nil {
 		if err := validateMount(cfg); err != nil {
 			return err
+		}
+	}
+
+	if cfg.Auth != nil && cfg.Auth.Enabled {
+		ttl := cfg.Auth.AccessTokenTTLSeconds
+		// Keep in sync with auth.MinAccessTokenTTLSeconds (avoid auth↔config import cycle).
+		const minTTL = 10
+		if ttl != -1 && ttl < minTTL {
+			return fmt.Errorf("auth.access_token_ttl_seconds must be -1 (never) or >= %d, got %d", minTTL, ttl)
 		}
 	}
 

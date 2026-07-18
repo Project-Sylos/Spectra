@@ -52,14 +52,13 @@ See [`INTEGRATION_GUIDE.md`](INTEGRATION_GUIDE.md) for detailed migration instru
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
 * **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone.
 * **FUSE Mount:** Mount Spectra worlds as local directories (Linux/macOS) for Finder, Explorer, and shell access with lazy generation.
+* **Optional Auth Tokens:** Per-world access/refresh tokens (opt-in) with sidecar persistence for migration testing.
 * **BoltDB Persistence:** Each node is stored in a local BoltDB key-value database with metadata for path, type, size, timestamps, etc.
 * **Configurable Complexity:** Control depth, fan-out distribution, file size ranges, and naming schemes through the config file or API.
 * **Instant Cleanup:** Simple teardown between tests — delete the BoltDB database file and regenerate.
 * **Deterministic Node IDs:** Stable IDs from path and type (`root` or `spc:` + hex); world-agnostic and reproducible.
 * **Optimized Queries:** Vectorized queries reduce database round trips by 3-4x.
 * **Write-Ahead Buffering:** Batched write operations with ordered insert/update queues for high throughput.
-* **Optional Node Cache:** Sliding window cache reduces DB reads by ~66% during BFS traversal (opt-in).
-
 ---
 
 ## Architecture
@@ -490,6 +489,27 @@ Secondary worlds omitted from `paths` auto-derive as `{primary_path}-{world}` (e
 - Do not execute binaries directly from the mount (go-fuse caveat); use a wrapper if needed.
 
 Uninstall on Linux: `fusermount -u /path/to/mount`
+
+#### Auth Tokens (opt-in)
+
+When `auth.enabled` is true, FS/API calls require a per-world access token. Refresh tokens never expire; access tokens expire after `access_token_ttl_seconds` (`-1` = never; otherwise **minimum 10 seconds**). Concurrent `Refresh` calls within **5 seconds** reuse the current access token so FS workers do not stampede renewal on the same expiry.
+
+```json
+"auth": {
+  "enabled": true,
+  "access_token_ttl_seconds": 3600
+}
+```
+
+```go
+pair, err := fs.IssueTokens("primary")
+// pair.AccessToken is also bound via SetAccessToken for SDK calls
+fs.SetAccessToken("s1", other.AccessToken)
+```
+
+HTTP: `POST /api/v1/auth/token` and `POST /api/v1/auth/refresh`. Protected routes expect `Authorization: Bearer <access_token>` (401 when missing/invalid/expired).
+
+Tokens persist next to the config as `.spectra-auth.json` (mode 0600; do not commit). Fallback: `.spectra-auth.env` in the working directory.
 
 ### Example API Calls
 

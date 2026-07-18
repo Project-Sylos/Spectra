@@ -37,7 +37,7 @@ func NewSpectraFS(configPath string) (*SpectraFS, error) {
 
 	// Initialize database with secondary tables
 	// Note: InitializeSchema() already creates root nodes automatically
-	database, err := db.New(cfg.Seed.DBPath, cfg.SecondaryTables, cfg.Seed.EnableCache)
+	database, err := db.New(cfg.Seed.DBPath, cfg.SecondaryTables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}

@@ -11,13 +11,15 @@ import (
 	"time"
 
 	"codeberg.org/Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/sdk"
 )
 
 // HTTPBackend implements Backend over the Spectra REST API.
 type HTTPBackend struct {
-	baseURL string
-	world   string
-	client  *http.Client
+	baseURL     string
+	world       string
+	accessToken string
+	client      *http.Client
 }
 
 // NewHTTPBackend creates a remote backend for the given base URL and world.
@@ -33,6 +35,11 @@ func NewHTTPBackend(baseURL, world string) *HTTPBackend {
 			Timeout: 60 * time.Second,
 		},
 	}
+}
+
+// SetAccessToken sets the Bearer token used for authenticated API calls.
+func (b *HTTPBackend) SetAccessToken(token string) {
+	b.accessToken = token
 }
 
 func (b *HTTPBackend) World() string {
@@ -92,10 +99,13 @@ func (b *HTTPBackend) ReadFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("not a file: %s", path)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/items/%s/data", b.baseURL, node.ID)
+	url := fmt.Sprintf("%s/api/v1/items/%s/data?table_name=%s", b.baseURL, node.ID, b.world)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if b.accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.accessToken)
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -103,6 +113,9 @@ func (b *HTTPBackend) ReadFile(path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, &sdk.UnauthorizedError{Reason: "unauthorized"}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get file data: HTTP %d", resp.StatusCode)
 	}
@@ -216,6 +229,9 @@ func (b *HTTPBackend) postJSON(path string, body any, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if b.accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+b.accessToken)
+	}
 
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -226,6 +242,9 @@ func (b *HTTPBackend) postJSON(path string, body any, out any) error {
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return &sdk.UnauthorizedError{Reason: "unauthorized"}
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrNotExist

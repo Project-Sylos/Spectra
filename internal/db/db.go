@@ -41,7 +41,7 @@ type DB struct {
 }
 
 // New creates a new database connection and initializes the schema
-func New(dbPath string, secondaryTables map[string]float64, enableCache bool) (*DB, error) {
+func New(dbPath string, secondaryTables map[string]float64) (*DB, error) {
 	// Check if database file exists
 	dbFileExists := false
 	if _, err := os.Stat(dbPath); err == nil {
@@ -78,8 +78,8 @@ func New(dbPath string, secondaryTables map[string]float64, enableCache bool) (*
 	// Initialize output buffer (batch size 10K, flush every 5 seconds)
 	db.outputBuffer = NewOutputBuffer(db, 10000, 5*time.Second)
 
-	// Initialize node cache
-	db.nodeCache = NewNodeCache(enableCache)
+	// Node cache disabled (removed from config)
+	db.nodeCache = NewNodeCache(false)
 
 	return db, nil
 }

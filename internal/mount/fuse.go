@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"codeberg.org/Sylos/Spectra/internal/types"
+	"codeberg.org/Sylos/Spectra/sdk"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -104,6 +105,9 @@ func errnoFor(err error) syscall.Errno {
 	}
 	if errors.Is(err, ErrNotExist) {
 		return syscall.ENOENT
+	}
+	if _, ok := sdk.IsUnauthorized(err); ok {
+		return syscall.EACCES
 	}
 	return syscall.EIO
 }

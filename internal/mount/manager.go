@@ -58,6 +58,14 @@ func NewManager(opts Options) (*Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("initialize Spectra SDK: %w", err)
 		}
+		if fs.AuthEnabled() {
+			for _, spec := range mounts {
+				if _, err := fs.EnsureWorldAuth(spec.World); err != nil {
+					fs.Close()
+					return nil, fmt.Errorf("ensure auth for world %s: %w", spec.World, err)
+				}
+			}
+		}
 	}
 
 	m := &Manager{
@@ -69,7 +77,8 @@ func NewManager(opts Options) (*Manager, error) {
 	for _, spec := range mounts {
 		var backend Backend
 		if opts.RemoteURL != "" {
-			backend = NewHTTPBackend(opts.RemoteURL, spec.World)
+			hb := NewHTTPBackend(opts.RemoteURL, spec.World)
+			backend = hb
 		} else {
 			backend = NewSDKBackend(fs, spec.World)
 		}

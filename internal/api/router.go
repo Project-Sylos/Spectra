@@ -22,50 +22,51 @@ func NewRouter(fs *sdk.SpectraFS) *Router {
 func (r *Router) SetupRoutes() *chi.Mux {
 	router := chi.NewRouter()
 
-	// Standard middleware
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Timeout(60))
-
-	// Custom middleware
 	router.Use(apimiddleware.CORS)
 
-	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler()
 	itemHandler := handlers.NewItemHandler(r.fs)
 	nodeHandler := handlers.NewNodeHandler(r.fs)
 	systemHandler := handlers.NewSystemHandler(r.fs)
+	authHandler := handlers.NewAuthHandler(r.fs)
 
-	// Health check
 	router.Get("/health", healthHandler.HealthCheck)
 
-	// API routes
 	router.Route("/api/v1", func(api chi.Router) {
-		// Item operations (files and folders)
-		api.Route("/items", func(items chi.Router) {
-			items.Post("/list", itemHandler.ListItems)
-			items.Post("/get", itemHandler.GetItem)
-			items.Post("/delete", itemHandler.DeleteItemByPath)
-			items.Post("/folder", itemHandler.CreateFolder)
-			items.Post("/file", itemHandler.UploadFile)
-			items.Get("/{id}", nodeHandler.GetNode) // Reuse node handler for getting item info
-			items.Get("/{id}/data", itemHandler.GetFileData)
+		api.Route("/auth", func(auth chi.Router) {
+			auth.Post("/token", authHandler.IssueToken)
+			auth.Post("/refresh", authHandler.RefreshToken)
 		})
 
-		// Node operations
-		api.Route("/node", func(node chi.Router) {
-			node.Get("/{id}", nodeHandler.GetNode)
-			node.Delete("/{id}", nodeHandler.DeleteNode)
-		})
+		api.Group(func(protected chi.Router) {
+			protected.Use(apimiddleware.Auth(r.fs.AuthEngine()))
 
-		// System operations
-		api.Post("/reset", systemHandler.Reset)
-		api.Get("/config", systemHandler.GetConfig)
-		api.Get("/stats", systemHandler.GetStats)
-		api.Get("/tables", systemHandler.GetTables)
-		api.Get("/tables/{tableName}/count", systemHandler.GetTableCount)
+			protected.Route("/items", func(items chi.Router) {
+				items.Post("/list", itemHandler.ListItems)
+				items.Post("/get", itemHandler.GetItem)
+				items.Post("/delete", itemHandler.DeleteItemByPath)
+				items.Post("/folder", itemHandler.CreateFolder)
+				items.Post("/file", itemHandler.UploadFile)
+				items.Get("/{id}", nodeHandler.GetNode)
+				items.Get("/{id}/data", itemHandler.GetFileData)
+			})
+
+			protected.Route("/node", func(node chi.Router) {
+				node.Get("/{id}", nodeHandler.GetNode)
+				node.Delete("/{id}", nodeHandler.DeleteNode)
+			})
+
+			protected.Post("/reset", systemHandler.Reset)
+			protected.Get("/config", systemHandler.GetConfig)
+			protected.Get("/stats", systemHandler.GetStats)
+			protected.Get("/tables", systemHandler.GetTables)
+			protected.Get("/tables/{tableName}/count", systemHandler.GetTableCount)
+		})
 	})
 
 	return router

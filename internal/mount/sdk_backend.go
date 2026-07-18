@@ -70,7 +70,7 @@ func (b *SDKBackend) ReadFile(path string) ([]byte, error) {
 	if node.Type != types.NodeTypeFile {
 		return nil, fmt.Errorf("not a file: %s", path)
 	}
-	data, _, err := b.fs.GetFileData(node.ID)
+	data, _, err := b.fs.GetFileData(node.ID, b.world)
 	if err != nil {
 		return nil, err
 	}

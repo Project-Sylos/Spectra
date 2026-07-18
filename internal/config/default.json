@@ -10,7 +10,6 @@
     "seed": 40,
     "db_path": "./spectra.db",
     "file_binary_seed": 0,
-    "enable_cache": false,
     "diverging_tree_mode": true
   },
   "api": {

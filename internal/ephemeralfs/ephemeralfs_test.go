@@ -23,7 +23,6 @@ func testConfig() *types.Config {
 			Seed:                   42,
 			DBPath:                 "",
 			FileBinarySeed:         0,
-			EnableCache:            false,
 		},
 		API: types.APIConfig{Host: "localhost", Port: 8086},
 		SecondaryTables: map[string]float64{"s1": 0.7},

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 
+	"codeberg.org/Sylos/Spectra/internal/auth"
 	"codeberg.org/Sylos/Spectra/internal/chaos"
 	"codeberg.org/Sylos/Spectra/internal/config"
 	"codeberg.org/Sylos/Spectra/internal/ephemeralfs"
@@ -42,36 +43,35 @@ type fsInterface interface {
 type SpectraFS struct {
 	impl  fsInterface
 	chaos *chaos.Engine
+	auth  *auth.Engine
 }
 
 // New creates a new SpectraFS instance using the specified config file
 // The implementation (persistent or ephemeral) is selected based on the config mode
 func New(configPath string) (*SpectraFS, error) {
-	// Load configuration to determine mode
 	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	var impl fsInterface
-
-	// Select implementation based on mode
 	if cfg.Mode == "ephemeral" {
 		impl, err = ephemeralfs.NewEphemeralFS(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize EphemeralFS: %w", err)
 		}
 	} else {
-		// Default to persistent mode
 		impl, err = spectrafs.NewSpectraFS(configPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize SpectraFS: %w", err)
 		}
 	}
 
+	persistPath := auth.PersistPathForConfig(configPath)
 	return &SpectraFS{
 		impl:  impl,
 		chaos: chaos.NewEngine(cfg.Chaos, cfg.Seed.Seed),
+		auth:  auth.NewEngine(cfg.Auth, persistPath),
 	}, nil
 }
 
@@ -80,8 +80,41 @@ func NewWithDefaults() (*SpectraFS, error) {
 	return New("configs/default.json")
 }
 
+func (s *SpectraFS) requireAuth(world string) error {
+	if s == nil || s.auth == nil || !s.auth.Enabled() {
+		return nil
+	}
+	if world == "" {
+		world = "primary"
+	}
+	return s.auth.ValidateWorld(world)
+}
+
+func worldFromParent(req models.ParentIdentifier) string {
+	if req == nil {
+		return "primary"
+	}
+	if w := req.GetTableName(); w != "" {
+		return w
+	}
+	return "primary"
+}
+
+func worldFromNode(req models.NodeIdentifier) string {
+	if req == nil {
+		return "primary"
+	}
+	if w := req.GetTableName(); w != "" {
+		return w
+	}
+	return "primary"
+}
+
 // ListChildren returns the children of a given parent node
 func (s *SpectraFS) ListChildren(req *models.ListChildrenRequest) (*types.ListResult, error) {
+	if err := s.requireAuth(worldFromParent(req)); err != nil {
+		return nil, err
+	}
 	if err := s.beforeOp(chaos.EndpointListChildren, 0); err != nil {
 		return nil, err
 	}
@@ -90,15 +123,25 @@ func (s *SpectraFS) ListChildren(req *models.ListChildrenRequest) (*types.ListRe
 
 // GetNode retrieves a node using either ID or Path+TableName
 func (s *SpectraFS) GetNode(req *models.GetNodeRequest) (*types.Node, error) {
+	if err := s.requireAuth(worldFromNode(req)); err != nil {
+		return nil, err
+	}
 	if err := s.beforeOp(chaos.EndpointGetNode, 0); err != nil {
 		return nil, err
 	}
 	return s.impl.GetNode(req)
 }
 
-// GetFileData generates and returns file data with checksum for a given file ID
-// The data is generated on-the-fly and not persisted
-func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
+// GetFileData generates and returns file data with checksum for a given file ID.
+// World is required when auth is enabled so the correct per-world token is checked.
+func (s *SpectraFS) GetFileData(id string, world ...string) ([]byte, string, error) {
+	w := "primary"
+	if len(world) > 0 && world[0] != "" {
+		w = world[0]
+	}
+	if err := s.requireAuth(w); err != nil {
+		return nil, "", err
+	}
 	if err := s.beforeOp(chaos.EndpointGetFileData, 0); err != nil {
 		return nil, "", err
 	}
@@ -114,6 +157,9 @@ func (s *SpectraFS) GetFileData(id string) ([]byte, string, error) {
 
 // CreateFolder creates a new folder node
 func (s *SpectraFS) CreateFolder(req *models.CreateFolderRequest) (*types.Node, error) {
+	if err := s.requireAuth(worldFromParent(req)); err != nil {
+		return nil, err
+	}
 	if err := s.beforeOp(chaos.EndpointCreateFolder, 0); err != nil {
 		return nil, err
 	}
@@ -123,6 +169,9 @@ func (s *SpectraFS) CreateFolder(req *models.CreateFolderRequest) (*types.Node, 
 // UploadFile handles file uploads - processes the data and creates a file node
 // The actual file data is not persisted, only metadata
 func (s *SpectraFS) UploadFile(req *models.UploadFileRequest) (*types.Node, error) {
+	if err := s.requireAuth(worldFromParent(req)); err != nil {
+		return nil, err
+	}
 	var n int64
 	if req != nil {
 		n = int64(len(req.Data))
@@ -139,8 +188,6 @@ func (s *SpectraFS) Reset() error {
 }
 
 // Close closes the database connection after performing a WAL checkpoint to ensure data persistence.
-// This ensures all changes are fully saved before the process finishes.
-// Always call this method during graceful shutdown to guarantee data integrity.
 func (s *SpectraFS) Close() error {
 	return s.impl.Close()
 }
@@ -177,6 +224,9 @@ func (s *SpectraFS) FlushStats() {
 
 // DeleteNode deletes a node using either ID or Path+World
 func (s *SpectraFS) DeleteNode(req *models.DeleteNodeRequest) error {
+	if err := s.requireAuth(worldFromNode(req)); err != nil {
+		return err
+	}
 	return s.impl.DeleteNode(req)
 }
 
@@ -212,21 +262,14 @@ const (
 )
 
 // AsFS returns an fs.FS instance bound to a specific world
-// This allows SpectraFS to be used with tools like Rclone
-// Each world is projected as its own separate filesystem
-// Note: Currently only supported for persistent mode
 func (s *SpectraFS) AsFS(world string) fs.FS {
-	// Type assert to check if it's persistent mode
 	if persistentImpl, ok := s.impl.(*spectrafs.SpectraFS); ok {
 		return spectrafs.NewSpectraFSWrapper(persistentImpl, world)
 	}
-	// For ephemeral mode, return nil or a no-op wrapper
-	// TODO: Implement ephemeral fs.FS wrapper if needed
 	return nil
 }
 
 // AsFSWithDefaults returns an fs.FS instance using the "primary" world
-// This is a convenience method for the most common use case
 func (s *SpectraFS) AsFSWithDefaults() fs.FS {
 	return s.AsFS("primary")
 }

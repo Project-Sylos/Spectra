@@ -11,6 +11,7 @@ type Config struct {
 	API             APIConfig          `json:"api"`
 	SecondaryTables map[string]float64 `json:"secondary_tables"`
 	Chaos           *ChaosConfig       `json:"chaos,omitempty"`
+	Auth            *AuthConfig        `json:"auth,omitempty"`
 	Mount           *MountConfig       `json:"mount,omitempty"`
 }
 
@@ -32,8 +33,7 @@ type SeedConfig struct {
 	FileDepthDecayFactor   float64 `json:"file_depth_decay_factor"`
 	Seed                   int64   `json:"seed"`
 	DBPath                 string  `json:"db_path"`
-	FileBinarySeed         int64   `json:"file_binary_seed,omitempty"`
-	EnableCache            bool    `json:"enable_cache"`
+	FileBinarySeed int64 `json:"file_binary_seed,omitempty"`
 	// DivergingTreeMode (ephemeral only): seed child generation with worldName//path
 	// instead of path alone, so each world gets a different tree shape (e.g. for copy tests).
 	// Default false: same path in any world yields same children (identical trees).

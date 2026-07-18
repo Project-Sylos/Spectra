@@ -26,6 +26,10 @@ go.work.sum
 
 # env file
 .env
+.spectra-auth.json
+.spectra-auth.env
+**/.spectra-auth.json
+**/.spectra-auth.env
 
 # Editor/IDE
 # .idea/

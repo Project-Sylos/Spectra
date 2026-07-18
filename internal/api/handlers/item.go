@@ -52,6 +52,10 @@ func (h *ItemHandler) ListItems(w http.ResponseWriter, req *http.Request) {
 			chaos.WriteRateLimitedResponse(w, rl)
 			return
 		}
+		if _, ok := sdk.IsUnauthorized(err); ok {
+			h.sendError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to list items: %v", err))
 		return
 	}
@@ -147,9 +151,20 @@ func (h *ItemHandler) GetFileData(w http.ResponseWriter, req *http.Request) {
 		h.sendError(w, http.StatusBadRequest, "file id is required")
 		return
 	}
+	world := req.URL.Query().Get("table_name")
+	if world == "" {
+		world = req.URL.Query().Get("world")
+	}
+	if world == "" {
+		world = "primary"
+	}
 
-	data, checksum, err := h.fs.GetFileData(id)
+	data, checksum, err := h.fs.GetFileData(id, world)
 	if err != nil {
+		if _, ok := sdk.IsUnauthorized(err); ok {
+			h.sendError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get file data: %v", err))
 		return
 	}
