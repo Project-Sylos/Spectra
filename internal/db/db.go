@@ -907,8 +907,8 @@ func (sb *StatsBuffer) shutdown() {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// getStats retrieves stats from the database
-func (db *DB) getStats() (*types.Stats, error) {
+// GetStats retrieves stats from the database
+func (db *DB) GetStats() (*types.Stats, error) {
 	// BoltDB handles its own read locking
 	var stats *types.Stats
 	err := db.db.View(func(tx *bbolt.Tx) error {
@@ -981,7 +981,7 @@ func (db *DB) setStats(stats *types.Stats) error {
 // initializeStats initializes the stats bucket with zero values
 func (db *DB) initializeStats() error {
 	// Check if stats already exist
-	existingStats, err := db.getStats()
+	existingStats, err := db.GetStats()
 	if err != nil {
 		return err
 	}
@@ -1014,7 +1014,7 @@ func (db *DB) updateStatsForNodes(nodes []*types.Node, increment bool) error {
 	}
 
 	// Get current stats once (getStats handles locking)
-	stats, err := db.getStats()
+	stats, err := db.GetStats()
 	if err != nil {
 		return err
 	}
@@ -1071,11 +1071,6 @@ func (db *DB) updateStatsForNodes(nodes []*types.Node, increment bool) error {
 
 	// Save updated stats once (setStats handles locking)
 	return db.setStats(stats)
-}
-
-// GetStats retrieves the current filesystem statistics
-func (db *DB) GetStats() (*types.Stats, error) {
-	return db.getStats()
 }
 
 // FlushStats forces an immediate flush of the stats buffer
