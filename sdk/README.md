@@ -57,7 +57,7 @@ type SpectraFS struct {
 - `UpdateTraversalStatus(req *UpdateTraversalStatusRequest)` - Update node traversal status (supports ID or Path+TableName lookup)
 
 #### fs.FS Interface Operations
-- `AsFS(world string) fs.FS` - Returns an `fs.FS` instance bound to a specific world. **Only supported in persistent mode**; returns nil in ephemeral mode.
+- `AsFS(world string) fs.FS` - Returns an `fs.FS` instance bound to a specific world (persistent and ephemeral).
 - `AsFSWithDefaults() fs.FS` - Same as AsFS("primary")
 
 ## Type Re-exports

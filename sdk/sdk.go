@@ -28,6 +28,7 @@ type fsInterface interface {
 		models.DataRequest
 	}) (*types.Node, error)
 	DeleteNode(req models.NodeIdentifier) error
+	RenameNode(req *models.RenameNodeRequest) (*types.Node, error)
 	Reset() error
 	Close() error
 	GetConfig() *types.Config
@@ -230,6 +231,14 @@ func (s *SpectraFS) DeleteNode(req *models.DeleteNodeRequest) error {
 	return s.impl.DeleteNode(req)
 }
 
+// RenameNode renames a node in place (same parent) and rewrites descendant path IDs.
+func (s *SpectraFS) RenameNode(req *models.RenameNodeRequest) (*types.Node, error) {
+	if err := s.requireAuth(worldFromNode(req)); err != nil {
+		return nil, err
+	}
+	return s.impl.RenameNode(req)
+}
+
 // Re-export types for convenience
 type (
 	Config      = types.Config
@@ -249,6 +258,7 @@ type (
 	CreateFolderRequest = models.CreateFolderRequest
 	UploadFileRequest   = models.UploadFileRequest
 	DeleteNodeRequest   = models.DeleteNodeRequest
+	RenameNodeRequest   = models.RenameNodeRequest
 )
 
 // Re-export constants
@@ -261,12 +271,12 @@ const (
 	StatusFailed     = types.StatusFailed
 )
 
-// AsFS returns an fs.FS instance bound to a specific world
+// AsFS returns an fs.FS instance bound to a specific world (persistent or ephemeral).
 func (s *SpectraFS) AsFS(world string) fs.FS {
-	if persistentImpl, ok := s.impl.(*spectrafs.SpectraFS); ok {
-		return spectrafs.NewSpectraFSWrapper(persistentImpl, world)
+	if s == nil || s.impl == nil {
+		return nil
 	}
-	return nil
+	return spectrafs.NewSpectraFSWrapper(s.impl, world)
 }
 
 // AsFSWithDefaults returns an fs.FS instance using the "primary" world

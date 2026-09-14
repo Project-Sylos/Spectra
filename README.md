@@ -50,7 +50,7 @@ See [`INTEGRATION_GUIDE.md`](INTEGRATION_GUIDE.md) for detailed migration instru
 * **Heavy-Tailed Distribution:** Realistic fanout using logarithmic buckets with exponential decay (mostly small directories, occasionally huge ones).
 * **Unified Single-Bucket Architecture:** One bucket with world-based existence tracking for optimal performance.
 * **RESTful API Interface:** Exposes a comprehensive HTTP API with folder/file CRUD operations.
-* **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone.
+* **Go fs.FS Interface:** Implements Go's standard library `fs.FS` interface for compatibility with tools like Rclone. Persistent and ephemeral modes both expose `AsFS`.
 * **FUSE Mount:** Mount Spectra worlds as local directories (Linux/macOS) for Finder, Explorer, and shell access with lazy generation.
 * **Optional Auth Tokens:** Per-world access/refresh tokens (opt-in) with sidecar persistence for migration testing.
 * **BoltDB Persistence:** Each node is stored in a local BoltDB key-value database with metadata for path, type, size, timestamps, etc.

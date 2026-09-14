@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"sort"
 	"strings"
 	"time"
 
@@ -418,6 +419,110 @@ func (s *SpectraFS) DeleteNode(req models.NodeIdentifier) error {
 	return s.db.DeleteNode(node.ID)
 }
 
+// RenameNode renames a node in place and rewrites descendant paths/IDs (path-hashed).
+func (s *SpectraFS) RenameNode(req *models.RenameNodeRequest) (*types.Node, error) {
+	if req == nil {
+		return nil, fmt.Errorf("rename request is required")
+	}
+	if err := models.ValidateNodeIdentifier(req); err != nil {
+		return nil, err
+	}
+	newName := strings.TrimSpace(req.GetNewName())
+	if newName == "" {
+		return nil, fmt.Errorf("new name is required")
+	}
+	root, world, err := s.resolveNodeAndWorld(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve node: %w", err)
+	}
+	_ = world
+	if root.ID == "root" {
+		return nil, fmt.Errorf("cannot rename root node")
+	}
+	if root.Name == newName {
+		return root, nil
+	}
+	oldPath := root.Path
+	newPath := utils.JoinPath(root.ParentPath, newName)
+	subtree, err := s.collectSubtree(root)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(subtree, func(i, j int) bool {
+		return subtree[i].DepthLevel < subtree[j].DepthLevel
+	})
+	idRemap := make(map[string]string, len(subtree))
+	type planned struct {
+		old *types.Node
+		neu *types.Node
+	}
+	plans := make([]planned, 0, len(subtree))
+	for _, n := range subtree {
+		rel := strings.TrimPrefix(n.Path, oldPath)
+		mappedPath := newPath + rel
+		if n.ID == root.ID {
+			mappedPath = newPath
+		}
+		mappedParentPath := n.ParentPath
+		if n.ID == root.ID {
+			mappedParentPath = root.ParentPath
+		} else if strings.HasPrefix(n.ParentPath, oldPath) {
+			mappedParentPath = newPath + strings.TrimPrefix(n.ParentPath, oldPath)
+		}
+		parentID := n.ParentID
+		if mapped, ok := idRemap[n.ParentID]; ok {
+			parentID = mapped
+		}
+		name := n.Name
+		if n.ID == root.ID {
+			name = newName
+		}
+		newID := utils.DeterministicNodeID(mappedPath, n.Type)
+		idRemap[n.ID] = newID
+		clone := *n
+		clone.ID = newID
+		clone.ParentID = parentID
+		clone.Name = name
+		clone.Path = mappedPath
+		clone.ParentPath = mappedParentPath
+		clone.ChildIDs = nil
+		clone.LastUpdated = time.Now()
+		plans = append(plans, planned{old: n, neu: &clone})
+	}
+	for _, p := range plans {
+		if err := s.db.InsertNode(p.neu); err != nil {
+			return nil, fmt.Errorf("insert renamed node %s: %w", p.neu.Path, err)
+		}
+	}
+	for i := len(plans) - 1; i >= 0; i-- {
+		if err := s.db.DeleteNode(plans[i].old.ID); err != nil {
+			return nil, fmt.Errorf("delete old node %s: %w", plans[i].old.ID, err)
+		}
+	}
+	s.db.Flush(idRemap[root.ID])
+	return s.db.GetNodeByID(idRemap[root.ID])
+}
+
+func (s *SpectraFS) collectSubtree(root *types.Node) ([]*types.Node, error) {
+	out := []*types.Node{root}
+	queue := []string{root.ID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		children, err := s.db.GetChildrenByParentID(id, "primary")
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range children {
+			out = append(out, c)
+			if c.Type == types.NodeTypeFolder {
+				queue = append(queue, c.ID)
+			}
+		}
+	}
+	return out, nil
+}
+
 // GetSecondaryTables returns the list of secondary table names
 func (s *SpectraFS) GetSecondaryTables() []string {
 	return s.db.GetSecondaryTables()
@@ -497,21 +602,48 @@ func (s *SpectraFS) getFileDataDeterministic(_ string) ([]byte, string, error) {
 	return generator.GenerateDeterministicFileData(s.cfg.Seed.FileBinarySeed)
 }
 
-// SpectraFSWrapper wraps SpectraFS to implement fs.FS interface for a specific world
+// nodeBackend is the List/Get/Read surface both persistent and ephemeral FS implement.
+type nodeBackend interface {
+	GetNode(req models.NodeIdentifier) (*types.Node, error)
+	ListChildren(req models.ParentIdentifier) (*types.ListResult, error)
+	GetFileData(id string) ([]byte, string, error)
+}
+
+// SpectraFSWrapper projects one world as an fs.FS for tools like Rclone.
 type SpectraFSWrapper struct {
-	fs    *SpectraFS
-	world string
+	backend nodeBackend
+	world   string
 }
 
 // NewSpectraFSWrapper creates a new fs.FS wrapper for a specific world
-func NewSpectraFSWrapper(fs *SpectraFS, world string) *SpectraFSWrapper {
+func NewSpectraFSWrapper(backend nodeBackend, world string) *SpectraFSWrapper {
 	if world == "" {
 		world = "primary"
 	}
 	return &SpectraFSWrapper{
-		fs:    fs,
-		world: world,
+		backend: backend,
+		world:   world,
 	}
+}
+
+func (w *SpectraFSWrapper) listChildren(parentPath string) (*types.ListResult, error) {
+	depth := utils.PathDepth(parentPath)
+	result, err := w.backend.ListChildren(&models.ListChildrenRequest{
+		ParentPath: parentPath,
+		TableName:  w.world,
+		Depth:      &depth,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || !result.Success {
+		msg := "list children failed"
+		if result != nil && result.Message != "" {
+			msg = result.Message
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	return result, nil
 }
 
 // Open opens the named file or directory
@@ -535,25 +667,19 @@ func (w *SpectraFSWrapper) Open(name string) (fs.File, error) {
 		TableName: w.world,
 	}
 
-	node, err := w.fs.GetNode(req)
+	node, err := w.backend.GetNode(req)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
 
 	// Check if node exists in the requested world
-	if !node.ExistenceMap[w.world] {
+	if node.ExistenceMap != nil && !node.ExistenceMap[w.world] {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
 
 	// Return appropriate file handle
 	if node.Type == types.NodeTypeFolder {
-		// For directories, we need to list children
-		listReq := &models.ListChildrenRequest{
-			ParentPath: path,
-			TableName:  w.world,
-		}
-
-		result, err := w.fs.ListChildren(listReq)
+		result, err := w.listChildren(path)
 		if err != nil {
 			return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 		}
@@ -573,8 +699,7 @@ func (w *SpectraFSWrapper) Open(name string) (fs.File, error) {
 		}, nil
 	}
 
-	// For files, generate deterministic data
-	data, _, err := w.fs.getFileDataDeterministic(node.ID)
+	data, _, err := w.backend.GetFileData(node.ID)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
@@ -657,13 +782,13 @@ func (w *SpectraFSWrapper) Stat(name string) (fs.FileInfo, error) {
 		TableName: w.world,
 	}
 
-	node, err := w.fs.GetNode(req)
+	node, err := w.backend.GetNode(req)
 	if err != nil {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
 
 	// Check if node exists in the requested world
-	if !node.ExistenceMap[w.world] {
+	if node.ExistenceMap != nil && !node.ExistenceMap[w.world] {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
 

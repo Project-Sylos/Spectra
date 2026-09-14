@@ -3,7 +3,6 @@ package mount
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"codeberg.org/Sylos/Spectra/internal/types"
 	"codeberg.org/Sylos/Spectra/internal/utils"
@@ -45,12 +44,7 @@ func JoinChildPath(parentPath, name string) string {
 
 // ParentPathDepth returns the depth level of a folder path (root "/" is 0).
 func ParentPathDepth(path string) int {
-	path = NormalizePath(path)
-	trimmed := strings.Trim(path, "/")
-	if trimmed == "" {
-		return 0
-	}
-	return strings.Count(trimmed, "/") + 1
+	return utils.PathDepth(NormalizePath(path))
 }
 
 // NodeExistsInWorld reports whether node exists in the backend's world.

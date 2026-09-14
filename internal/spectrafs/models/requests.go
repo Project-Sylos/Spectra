@@ -130,6 +130,26 @@ func (r *DeleteNodeRequest) GetPath() string { return r.Path }
 // GetTableName implements NodeIdentifier
 func (r *DeleteNodeRequest) GetTableName() string { return r.TableName }
 
+// RenameNodeRequest renames a node in place (same parent). Implements NodeIdentifier.
+type RenameNodeRequest struct {
+	ID        string `json:"id,omitempty"`
+	Path      string `json:"path,omitempty"`
+	TableName string `json:"table_name,omitempty"`
+	NewName   string `json:"new_name"`
+}
+
+// GetID implements NodeIdentifier
+func (r *RenameNodeRequest) GetID() string { return r.ID }
+
+// GetPath implements NodeIdentifier
+func (r *RenameNodeRequest) GetPath() string { return r.Path }
+
+// GetTableName implements NodeIdentifier
+func (r *RenameNodeRequest) GetTableName() string { return r.TableName }
+
+// GetNewName returns the destination basename.
+func (r *RenameNodeRequest) GetNewName() string { return r.NewName }
+
 // UpdateTraversalStatusRequest represents the request to update a node's traversal status
 // You can specify either:
 //   - ID: Direct node ID

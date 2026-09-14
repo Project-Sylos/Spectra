@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"path"
+	"strings"
 	"time"
 
 	"codeberg.org/Sylos/Spectra/internal/generator"
@@ -163,38 +164,23 @@ func (e *EphemeralFS) ListChildren(req models.ParentIdentifier) (*types.ListResu
 	return result, nil
 }
 
-// GetNode generates a synthetic node from ID
+// GetNode returns a synthetic node. Path+world looks up a generated child of the parent;
+// ID-only lookups return a generic node (root when id is empty or "root").
 func (e *EphemeralFS) GetNode(req models.NodeIdentifier) (*types.Node, error) {
 	if err := models.ValidateNodeIdentifier(req); err != nil {
 		return nil, err
 	}
 
+	pathStr := req.GetPath()
+	if pathStr != "" && pathStr != "/" {
+		return e.nodeAtPath(pathStr, req.GetTableName())
+	}
+
 	id := req.GetID()
-	if id == "" {
-		id = "root"
+	if id == "" || id == "root" || pathStr == "/" {
+		return e.rootNode(), nil
 	}
 
-	// Generate synthetic node
-	// For root, create a folder node
-	if id == "root" {
-		return &types.Node{
-			ID:           "root",
-			ParentID:     "",
-			Name:         "",
-			Path:         "/",
-			ParentPath:   "",
-			Type:         types.NodeTypeFolder,
-			DepthLevel:   0,
-			Size:         0,
-			LastUpdated:  time.Now(),
-			Checksum:     nil,
-			ExistenceMap: buildFullExistenceMap(e.cfg),
-			ChildIDs:     nil,
-		}, nil
-	}
-
-	// For other IDs, generate a generic node
-	// In ephemeral mode, we don't track what type it is, so default to folder
 	return &types.Node{
 		ID:           id,
 		ParentID:     "",
@@ -209,6 +195,60 @@ func (e *EphemeralFS) GetNode(req models.NodeIdentifier) (*types.Node, error) {
 		ExistenceMap: buildFullExistenceMap(e.cfg),
 		ChildIDs:     nil,
 	}, nil
+}
+
+func (e *EphemeralFS) rootNode() *types.Node {
+	return &types.Node{
+		ID:           "root",
+		ParentID:     "",
+		Name:         "",
+		Path:         "/",
+		ParentPath:   "",
+		Type:         types.NodeTypeFolder,
+		DepthLevel:   0,
+		Size:         0,
+		LastUpdated:  time.Now(),
+		Checksum:     nil,
+		ExistenceMap: buildFullExistenceMap(e.cfg),
+		ChildIDs:     nil,
+	}
+}
+
+func (e *EphemeralFS) nodeAtPath(pathStr, world string) (*types.Node, error) {
+	parentPath := path.Dir(pathStr)
+	if parentPath == "." {
+		parentPath = "/"
+	}
+	name := path.Base(pathStr)
+	depth := utils.PathDepth(parentPath)
+	result, err := e.ListChildren(&models.ListChildrenRequest{
+		ParentPath: parentPath,
+		TableName:  world,
+		Depth:      &depth,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || !result.Success {
+		msg := "node not found"
+		if result != nil && result.Message != "" {
+			msg = result.Message
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	for i := range result.Folders {
+		if result.Folders[i].Name == name {
+			node := result.Folders[i].Node
+			return &node, nil
+		}
+	}
+	for i := range result.Files {
+		if result.Files[i].Name == name {
+			node := result.Files[i].Node
+			return &node, nil
+		}
+	}
+	return nil, fmt.Errorf("node not found")
 }
 
 // GetFileData generates deterministic file data and checksum
@@ -308,6 +348,43 @@ func (e *EphemeralFS) UploadFile(req interface {
 func (e *EphemeralFS) DeleteNode(req models.NodeIdentifier) error {
 	// No-op - nothing to delete
 	return nil
+}
+
+// RenameNode returns a renamed node metadata object (not persisted) in ephemeral mode.
+func (e *EphemeralFS) RenameNode(req *models.RenameNodeRequest) (*types.Node, error) {
+	if req == nil {
+		return nil, fmt.Errorf("rename request is required")
+	}
+	newName := strings.TrimSpace(req.GetNewName())
+	if newName == "" {
+		return nil, fmt.Errorf("new name is required")
+	}
+	oldPath := strings.TrimSpace(req.GetPath())
+	if oldPath == "" {
+		return nil, fmt.Errorf("ephemeral rename requires path")
+	}
+	parentPath := "/"
+	if i := strings.LastIndex(strings.TrimSuffix(oldPath, "/"), "/"); i >= 0 {
+		parentPath = oldPath[:i]
+		if parentPath == "" {
+			parentPath = "/"
+		}
+	}
+	newPath := utils.JoinPath(parentPath, newName)
+	nodeType := types.NodeTypeFolder
+	if strings.Contains(newName, ".") {
+		nodeType = types.NodeTypeFile
+	}
+	return &types.Node{
+		ID:           utils.DeterministicNodeID(newPath, nodeType),
+		ParentID:     req.GetID(),
+		Name:         newName,
+		Path:         newPath,
+		ParentPath:   parentPath,
+		Type:         nodeType,
+		LastUpdated:  time.Now(),
+		ExistenceMap: buildFullExistenceMap(e.cfg),
+	}, nil
 }
 
 // Reset is a no-op in ephemeral mode (no state to reset)

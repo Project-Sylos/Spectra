@@ -191,3 +191,36 @@ func TestListChildren_DivergingTreeMode(t *testing.T) {
 		t.Errorf("with DivergingTreeMode true, same path in different worlds (primary vs s1) should yield different children; got identical fingerprints")
 	}
 }
+
+func TestGetNode_ByPathMatchesListedChild(t *testing.T) {
+	fs, err := NewEphemeralFS(testConfig())
+	if err != nil {
+		t.Fatalf("NewEphemeralFS: %v", err)
+	}
+	depth := 0
+	listed, err := fs.ListChildren(&models.ListChildrenRequest{
+		ParentPath: "/",
+		TableName:  "primary",
+		Depth:      &depth,
+	})
+	if err != nil || listed == nil || !listed.Success {
+		t.Fatalf("ListChildren: err=%v result=%v", err, listed)
+	}
+	if len(listed.Folders)+len(listed.Files) == 0 {
+		t.Fatal("expected children at root")
+	}
+	var want types.Node
+	if len(listed.Folders) > 0 {
+		want = listed.Folders[0].Node
+	} else {
+		want = listed.Files[0].Node
+	}
+	got, err := fs.GetNode(&models.GetNodeRequest{Path: want.Path, TableName: "primary"})
+	if err != nil {
+		t.Fatalf("GetNode(%s): %v", want.Path, err)
+	}
+	if got.ID != want.ID || got.Type != want.Type || got.Name != want.Name {
+		t.Errorf("GetNode mismatch: got id=%s type=%s name=%s want id=%s type=%s name=%s",
+			got.ID, got.Type, got.Name, want.ID, want.Type, want.Name)
+	}
+}

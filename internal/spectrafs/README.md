@@ -18,7 +18,7 @@ spectrafs/
 - **Orchestration**: Loads config, opens DB (with buffer and optional cache), creates RNG. ListChildren resolves parent (by ID or path+world), fetches or lazily generates children, persists them, returns filtered result.
 - **World-aware operations**: All node access respects ExistenceMap and requested world (table name).
 - **Lazy generation**: Children are generated on first list at a given parent/depth and then stored; subsequent lists read from DB.
-- **fs.FS**: SpectraFSWrapper projects one world as an `fs.FS` (ReadFile, ReadDir, Stat, Glob) for tools like Rclone. Only available in persistent mode from the SDK.
+- **fs.FS**: SpectraFSWrapper projects one world as an `fs.FS` (ReadFile, ReadDir, Stat, Glob) for tools like Rclone. The SDK exposes this for both persistent and ephemeral implementations.
 
 ## Key Operations
 
