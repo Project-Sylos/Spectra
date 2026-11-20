@@ -164,11 +164,32 @@ func GenerateChildren(parent *types.Node, depth int, rng *RNG, cfg *types.Config
 	return children, nil
 }
 
+// identityName is the classic numbered basename used only to mint DeterministicNodeID.
+// Display names may differ when UniqueIDNames is set.
+func identityName(nodeType string, index int) string {
+	if nodeType == types.NodeTypeFile {
+		return fmt.Sprintf("file_%d.txt", index)
+	}
+	return fmt.Sprintf("folder_%d", index)
+}
+
+func displayName(cfg *types.Config, nodeID, nodeType string, index int) string {
+	if cfg != nil && cfg.Seed.UniqueIDNames {
+		if nodeType == types.NodeTypeFile {
+			return nodeID + ".txt"
+		}
+		return nodeID
+	}
+	return identityName(nodeType, index)
+}
+
 // generateFolder creates a new folder node with deterministic ID and ExistenceMap
 func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
-	name := fmt.Sprintf("folder_%d", index)
+	ident := identityName(types.NodeTypeFolder, index)
+	identityPath := utils.JoinPath(parent.Path, ident)
+	nodeID := utils.DeterministicNodeID(identityPath, types.NodeTypeFolder)
+	name := displayName(cfg, nodeID, types.NodeTypeFolder, index)
 	pathStr := utils.JoinPath(parent.Path, name)
-	nodeID := utils.DeterministicNodeID(pathStr, types.NodeTypeFolder)
 
 	// Create existence map - ensure all worlds have keys
 	existenceMap := make(map[string]bool)
@@ -205,9 +226,11 @@ func generateFolder(parent *types.Node, index int, depth int, cfg *types.Config,
 
 // generateFile creates a new file node with deterministic ID and ExistenceMap
 func generateFile(parent *types.Node, index int, depth int, cfg *types.Config, rng *RNG) (*types.Node, error) {
-	name := fmt.Sprintf("file_%d.txt", index)
+	ident := identityName(types.NodeTypeFile, index)
+	identityPath := utils.JoinPath(parent.Path, ident)
+	nodeID := utils.DeterministicNodeID(identityPath, types.NodeTypeFile)
+	name := displayName(cfg, nodeID, types.NodeTypeFile, index)
 	pathStr := utils.JoinPath(parent.Path, name)
-	nodeID := utils.DeterministicNodeID(pathStr, types.NodeTypeFile)
 
 	// Generate file data and checksum deterministically so repeated reads always
 	// return identical content, regardless of node identity
