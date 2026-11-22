@@ -3,6 +3,7 @@ package ephemeralfs
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"testing"
 
 	"codeberg.org/Sylos/Spectra/internal/spectrafs/models"
@@ -189,6 +190,53 @@ func TestListChildren_DivergingTreeMode(t *testing.T) {
 	fpOnS := stableFingerprint(rS1_2)
 	if fpOnP == fpOnS {
 		t.Errorf("with DivergingTreeMode true, same path in different worlds (primary vs s1) should yield different children; got identical fingerprints")
+	}
+}
+
+func TestListChildren_UniqueIDNames(t *testing.T) {
+	cfg := testConfig()
+	cfg.Seed.UniqueIDNames = true
+	fs, err := NewEphemeralFS(cfg)
+	if err != nil {
+		t.Fatalf("NewEphemeralFS: %v", err)
+	}
+	depth := 0
+	listed, err := fs.ListChildren(&models.ListChildrenRequest{
+		ParentPath: "/",
+		TableName:  "primary",
+		Depth:      &depth,
+	})
+	if err != nil || listed == nil || !listed.Success {
+		t.Fatalf("ListChildren: err=%v result=%v", err, listed)
+	}
+	if len(listed.Folders)+len(listed.Files) == 0 {
+		t.Fatal("expected children")
+	}
+	for _, f := range listed.Folders {
+		if f.Name != f.ID {
+			t.Fatalf("folder name=%q id=%q", f.Name, f.ID)
+		}
+		if strings.HasPrefix(f.Name, "folder_") {
+			t.Fatalf("expected id-style folder name, got %q", f.Name)
+		}
+	}
+	for _, f := range listed.Files {
+		if f.Name != f.ID+".txt" {
+			t.Fatalf("file name=%q id=%q", f.Name, f.ID)
+		}
+	}
+	var want types.Node
+	if len(listed.Folders) > 0 {
+		want = listed.Folders[0].Node
+	} else {
+		want = listed.Files[0].Node
+	}
+	got, err := fs.GetNode(&models.GetNodeRequest{Path: want.Path, TableName: "primary"})
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if got.ID != want.ID || got.Name != want.Name {
+		t.Fatalf("GetNode mismatch got=%+v want=%+v", got, want)
 	}
 }
 

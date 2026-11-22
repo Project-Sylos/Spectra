@@ -38,6 +38,12 @@ type SeedConfig struct {
 	// instead of path alone, so each world gets a different tree shape (e.g. for copy tests).
 	// Default false: same path in any world yields same children (identical trees).
 	DivergingTreeMode bool `json:"diverging_tree_mode,omitempty"`
+	// UniqueIDNames names folders/files after their deterministic node ID
+	// (files keep a ".txt" suffix: "{id}.txt") instead of folder_N / file_N.txt.
+	// IDs are still derived from a stable identity path using the classic numbered
+	// names so identity does not depend on the display name. Useful for large
+	// stress trees so trigram indexes are not flooded by shared "folder_"/"file_" grams.
+	UniqueIDNames bool `json:"unique_id_names,omitempty"`
 }
 
 // APIConfig represents the HTTP API configuration
